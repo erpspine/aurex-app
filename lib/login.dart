@@ -369,16 +369,24 @@ class AurexAuthApi {
         headers: const {'Accept': 'application/json'},
         body: jsonEncode({'email': email, 'password': password}),
       );
-      final responseBody = response.body;
-      final payload = jsonDecode(responseBody) as Map<String, dynamic>;
+      final payload = _payloadFrom(response);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw AurexAuthException(_messageFrom(payload));
       }
 
+      final token = payload['token'];
+      final user = payload['user'];
+
+      if (token is! String || token.isEmpty || user is! Map) {
+        throw const AurexAuthException(
+          'The server returned an incomplete login response.',
+        );
+      }
+
       return AurexSession(
-        token: payload['token'] as String,
-        user: Map<String, dynamic>.from(payload['user'] as Map),
+        token: token,
+        user: Map<String, dynamic>.from(user),
         member: payload['member'] is Map
             ? Map<String, dynamic>.from(payload['member'] as Map)
             : null,
@@ -392,6 +400,38 @@ class AurexAuthApi {
         'The server returned an invalid response.',
       );
     }
+  }
+
+  static Map<String, dynamic> _payloadFrom(AurexHttpResponse response) {
+    final responseBody = response.body.trim();
+
+    if (responseBody.isEmpty) {
+      if (response.statusCode >= 500) {
+        throw AurexAuthException(
+          'Server error ${response.statusCode}. Please contact support.',
+        );
+      }
+
+      throw const FormatException();
+    }
+
+    try {
+      final decoded = jsonDecode(responseBody);
+
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } on FormatException {
+      if (response.statusCode >= 500) {
+        throw AurexAuthException(
+          'Server error ${response.statusCode}. Please contact support.',
+        );
+      }
+
+      rethrow;
+    }
+
+    throw const FormatException();
   }
 
   static String _messageFrom(Map<String, dynamic> payload) {
