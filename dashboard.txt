@@ -1,0 +1,217 @@
+// src/pages/Reports.jsx
+
+import React from "react";
+import {
+  Download,
+  Filter,
+  BarChart3,
+  Wallet,
+  Users,
+  CalendarDays,
+  Activity,
+  Dumbbell,
+  Utensils,
+  CreditCard,
+  UserCheck,
+  TrendingUp,
+  FileText,
+  Eye,
+} from "lucide-react";
+
+const reports = [
+  { name: "Revenue Report", type: "Finance", period: "Monthly", icon: Wallet },
+  { name: "Members Report", type: "Membership", period: "Monthly", icon: Users },
+  { name: "Attendance Report", type: "Gym", period: "Daily", icon: UserCheck },
+  { name: "Workout Usage Report", type: "Mobile App", period: "Weekly", icon: Dumbbell },
+  { name: "Diet Plan Report", type: "Mobile App", period: "Monthly", icon: Utensils },
+  { name: "Classes Report", type: "Gym", period: "Weekly", icon: CalendarDays },
+];
+
+export default function Reports() {
+  return (
+    <div className="min-h-screen bg-[#050505] text-white p-8">
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-4xl font-black">Reports</h1>
+          <p className="text-gray-400 mt-1">
+            View gym performance, revenue, members, attendance and app analytics.
+          </p>
+        </div>
+
+        <button className="bg-[#C8A13A] text-black font-bold px-5 py-3 rounded-2xl flex items-center gap-2">
+          <Download size={18} />
+          Export Reports
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
+        <StatCard icon={Wallet} title="Monthly Revenue" value="TZS 18.4M" change="+14.8%" />
+        <StatCard icon={Users} title="Active Members" value="1,248" change="+8.2%" />
+        <StatCard icon={UserCheck} title="Visits This Month" value="7,842" change="+11.4%" />
+        <StatCard icon={Activity} title="Workout Starts" value="4,320" change="+22.1%" />
+      </div>
+
+      <div className="bg-[#111] border border-white/10 rounded-3xl p-5 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <input
+            type="date"
+            className="bg-[#050505] border border-white/10 rounded-2xl px-4 py-3 text-gray-300 outline-none"
+          />
+
+          <input
+            type="date"
+            className="bg-[#050505] border border-white/10 rounded-2xl px-4 py-3 text-gray-300 outline-none"
+          />
+
+          <select className="bg-[#050505] border border-white/10 rounded-2xl px-4 py-3 text-gray-300 outline-none">
+            <option>All Reports</option>
+            <option>Finance</option>
+            <option>Membership</option>
+            <option>Attendance</option>
+            <option>Mobile App</option>
+          </select>
+
+          <select className="bg-[#050505] border border-white/10 rounded-2xl px-4 py-3 text-gray-300 outline-none">
+            <option>This Month</option>
+            <option>Today</option>
+            <option>This Week</option>
+            <option>This Year</option>
+          </select>
+
+          <button className="border border-white/10 px-5 py-3 rounded-2xl flex items-center justify-center gap-2 text-gray-300 hover:border-[#C8A13A]">
+            <Filter size={18} />
+            Apply Filter
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
+        <div className="xl:col-span-2 bg-[#111] border border-white/10 rounded-3xl p-6">
+          <div className="flex justify-between mb-6">
+            <div>
+              <h2 className="text-xl font-bold">Revenue Performance</h2>
+              <p className="text-gray-500 text-sm">
+                Monthly collections from members and walk-in clients.
+              </p>
+            </div>
+            <span className="text-[#C8A13A] text-sm">Jan - Jun 2026</span>
+          </div>
+
+          <div className="grid grid-cols-6 gap-3 items-end h-60">
+            {[80, 120, 95, 150, 135, 190].map((height, index) => (
+              <div key={index} className="flex flex-col items-center gap-3">
+                <div
+                  className="w-full rounded-t-xl bg-gradient-to-t from-[#C8A13A] to-[#F3D36B]"
+                  style={{ height }}
+                />
+                <span className="text-xs text-gray-500">
+                  {["Jan", "Feb", "Mar", "Apr", "May", "Jun"][index]}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-[#111] border border-white/10 rounded-3xl p-6">
+          <h2 className="text-xl font-bold mb-5">Revenue Breakdown</h2>
+
+          <Breakdown label="Monthly Members" value="TZS 13.2M" percent="72%" />
+          <Breakdown label="Walk-In Clients" value="TZS 2.1M" percent="12%" />
+          <Breakdown label="Personal Training" value="TZS 2.4M" percent="13%" />
+          <Breakdown label="Classes" value="TZS 700K" percent="3%" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
+        <ReportCard title="Membership Growth" value="+128 new members" icon={Users} />
+        <ReportCard title="Attendance Peak" value="6PM - 8PM busiest" icon={CalendarDays} />
+        <ReportCard title="Popular Workout" value="Upper Body Strength" icon={Dumbbell} />
+      </div>
+
+      <div className="bg-[#111] border border-white/10 rounded-3xl p-6">
+        <h2 className="text-xl font-bold mb-5">Available Reports</h2>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+          {reports.map((report) => {
+            const Icon = report.icon;
+
+            return (
+              <div
+                key={report.name}
+                className="bg-[#050505] border border-white/10 rounded-3xl p-5 hover:border-[#C8A13A]/60 transition"
+              >
+                <div className="w-12 h-12 rounded-2xl bg-[#C8A13A]/15 flex items-center justify-center mb-4">
+                  <Icon size={22} className="text-[#C8A13A]" />
+                </div>
+
+                <h3 className="text-lg font-black">{report.name}</h3>
+                <p className="text-gray-500 text-sm mt-1">
+                  {report.type} • {report.period}
+                </p>
+
+                <div className="flex gap-2 mt-5">
+                  <button className="flex-1 bg-[#C8A13A] text-black font-bold py-3 rounded-2xl flex items-center justify-center gap-2">
+                    <Eye size={16} />
+                    View
+                  </button>
+
+                  <button className="w-12 h-12 border border-white/10 rounded-2xl flex items-center justify-center text-gray-400 hover:text-[#C8A13A]">
+                    <Download size={17} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ icon: Icon, title, value, change }) {
+  return (
+    <div className="bg-[#111] border border-white/10 rounded-3xl p-5">
+      <div className="flex justify-between items-start">
+        <div className="w-12 h-12 rounded-2xl bg-[#C8A13A]/15 flex items-center justify-center">
+          <Icon className="text-[#C8A13A]" size={22} />
+        </div>
+
+        <div className="flex items-center gap-1 text-[#C8A13A] text-sm">
+          <TrendingUp size={15} />
+          {change}
+        </div>
+      </div>
+
+      <p className="text-gray-400 text-sm mt-5">{title}</p>
+      <h3 className="text-2xl font-black mt-1">{value}</h3>
+    </div>
+  );
+}
+
+function Breakdown({ label, value, percent }) {
+  return (
+    <div className="mb-5">
+      <div className="flex justify-between text-sm mb-2">
+        <span className="text-gray-400">{label}</span>
+        <span className="font-bold">{value}</span>
+      </div>
+
+      <div className="h-3 bg-[#050505] rounded-full overflow-hidden">
+        <div
+          className="h-full bg-[#C8A13A] rounded-full"
+          style={{ width: percent }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ReportCard({ title, value, icon: Icon }) {
+  return (
+    <div className="bg-[#111] border border-white/10 rounded-3xl p-6 hover:border-[#C8A13A]/60 transition">
+      <Icon size={28} className="text-[#C8A13A] mb-5" />
+      <p className="text-gray-400 text-sm">{title}</p>
+      <h3 className="text-xl font-black mt-2">{value}</h3>
+    </div>
+  );
+}
