@@ -33,6 +33,19 @@ Future<AurexHttpResponse> aurexGet(
   return _request(uri, method: 'GET', headers: headers);
 }
 
+Future<AurexHttpResponse> aurexPutJson(
+  Uri uri, {
+  required Map<String, String> headers,
+  required String body,
+}) {
+  return _request(
+    uri,
+    method: 'PUT',
+    headers: {...headers, 'Content-Type': 'application/json'},
+    body: body,
+  );
+}
+
 Future<AurexHttpResponse> _request(
   Uri uri, {
   required String method,

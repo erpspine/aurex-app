@@ -23,3 +23,11 @@ Future<AurexHttpResponse> aurexGet(
 }) {
   throw const AurexNetworkException();
 }
+
+Future<AurexHttpResponse> aurexPutJson(
+  Uri uri, {
+  required Map<String, String> headers,
+  required String body,
+}) {
+  throw const AurexNetworkException();
+}
