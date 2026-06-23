@@ -7,7 +7,7 @@ import 'landing.dart';
 
 const String aurexApiBaseUrl = String.fromEnvironment(
   'AUREX_API_BASE_URL',
-  defaultValue: 'http://10.0.2.2/aurex/backend/public/api',
+  defaultValue: 'https://api.aurex-performance.com',
 );
 
 class AurexLoginScreen extends StatefulWidget {
