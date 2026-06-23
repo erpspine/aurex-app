@@ -31,3 +31,12 @@ Future<AurexHttpResponse> aurexPutJson(
 }) {
   throw const AurexNetworkException();
 }
+
+Future<AurexHttpResponse> aurexUploadFile(
+  Uri uri, {
+  required Map<String, String> headers,
+  required String fieldName,
+  required String filePath,
+}) {
+  throw const AurexNetworkException();
+}

@@ -46,6 +46,15 @@ Future<AurexHttpResponse> aurexPutJson(
   );
 }
 
+Future<AurexHttpResponse> aurexUploadFile(
+  Uri uri, {
+  required Map<String, String> headers,
+  required String fieldName,
+  required String filePath,
+}) {
+  throw const AurexNetworkException();
+}
+
 Future<AurexHttpResponse> _request(
   Uri uri, {
   required String method,

@@ -37,6 +37,44 @@ class AurexApiClient {
     return MobileProfile.fromPayload(payload);
   }
 
+  static Future<MobileProfile> uploadProfilePhoto(String filePath) async {
+    try {
+      final uri = Uri.parse('$aurexApiBaseUrl/profile/photo');
+      final headers = <String, String>{'Accept': 'application/json'};
+
+      final token = AurexSession.current?.token;
+      if (token != null && token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
+      final response = await aurexUploadFile(
+        uri,
+        headers: headers,
+        fieldName: 'profile_photo',
+        filePath: filePath,
+      );
+      final payload = _payloadFrom(response);
+
+      if (response.statusCode == 401) {
+        throw const AurexApiException('Your session has expired. Login again.');
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw AurexApiException(
+          _messageFrom(payload) ?? 'Unable to update profile photo.',
+        );
+      }
+
+      return MobileProfile.fromPayload(payload);
+    } on AurexNetworkException {
+      throw const AurexApiException(
+        'Unable to reach the AUREX server. Check your connection.',
+      );
+    } on FormatException {
+      throw const AurexApiException('The server returned an invalid response.');
+    }
+  }
+
   static Future<List<Map<String, dynamic>>> _getList(
     String path,
     String listKey,
@@ -220,6 +258,8 @@ class MobileProfile {
       _string(member['emergency_contact_relationship']);
   String get emergencyPhone => _string(member['emergency_contact_phone']);
   String get memberSince => _date(member['start_date']);
+  String get profilePhotoUrl =>
+      AurexApiClient.mediaUrl(_string(user['profile_photo_path']));
 
   int get completionPercent {
     final fields = [

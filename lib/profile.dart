@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'api_client.dart';
 import 'bottom_nav.dart';
@@ -38,6 +39,33 @@ class _ProfilePageState extends State<ProfilePage> {
 
     if (updated == true) {
       _reload();
+    }
+  }
+
+  Future<void> _changePhoto() async {
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1200,
+        imageQuality: 85,
+      );
+
+      if (image == null) {
+        return;
+      }
+
+      await AurexApiClient.uploadProfilePhoto(image.path);
+      if (!mounted) return;
+
+      _reload();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile photo updated successfully.')),
+      );
+    } on AurexApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
     }
   }
 
@@ -81,6 +109,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       _ProfileHero(
                         profile: profile!,
                         onEdit: () => _editProfile(profile),
+                        onPhotoEdit: _changePhoto,
                       ),
                       const SizedBox(height: 28),
                       _ProfileStats(profile: profile),
@@ -138,10 +167,15 @@ class _TopBar extends StatelessWidget {
 }
 
 class _ProfileHero extends StatelessWidget {
-  const _ProfileHero({required this.profile, required this.onEdit});
+  const _ProfileHero({
+    required this.profile,
+    required this.onEdit,
+    required this.onPhotoEdit,
+  });
 
   final MobileProfile profile;
   final VoidCallback onEdit;
+  final VoidCallback onPhotoEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -159,18 +193,7 @@ class _ProfileHero extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
               child: ClipOval(
-                child: Image.asset(
-                  'assets/images/profile_avatar.png',
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Container(
-                    color: Colors.white.withValues(alpha: 0.08),
-                    child: const Icon(
-                      Icons.person,
-                      color: _ProfileColors.gold,
-                      size: 72,
-                    ),
-                  ),
-                ),
+                child: _AvatarImage(url: profile.profilePhotoUrl),
               ),
             ),
             Positioned(
@@ -181,7 +204,7 @@ class _ProfileHero extends StatelessWidget {
                 backgroundColor: _ProfileColors.softGold,
                 child: IconButton(
                   tooltip: 'Edit profile',
-                  onPressed: onEdit,
+                  onPressed: onPhotoEdit,
                   icon: const Icon(Icons.edit, color: Colors.black, size: 18),
                 ),
               ),
@@ -218,6 +241,41 @@ class _ProfileHero extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _AvatarImage extends StatelessWidget {
+  const _AvatarImage({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    if (url.isNotEmpty) {
+      return Image.network(
+        url,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => const _AvatarFallback(),
+      );
+    }
+
+    return Image.asset(
+      'assets/images/profile_avatar.png',
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => const _AvatarFallback(),
+    );
+  }
+}
+
+class _AvatarFallback extends StatelessWidget {
+  const _AvatarFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white.withValues(alpha: 0.08),
+      child: const Icon(Icons.person, color: _ProfileColors.gold, size: 72),
     );
   }
 }
@@ -643,6 +701,38 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
     }
   }
 
+  Future<void> _pickDateOfBirth() async {
+    final initialDate = DateTime.tryParse(_dob.text.trim());
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: initialDate ?? DateTime(2000),
+      firstDate: DateTime(1900),
+      lastDate: DateTime.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: _ProfileColors.softGold,
+              onPrimary: Colors.black,
+              surface: _ProfileColors.panel,
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (selected == null) {
+      return;
+    }
+
+    _dob.text =
+        '${selected.year.toString().padLeft(4, '0')}-'
+        '${selected.month.toString().padLeft(2, '0')}-'
+        '${selected.day.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -707,7 +797,9 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
                       controller: _dob,
                       label: 'Date of Birth',
                       hint: 'YYYY-MM-DD',
-                      keyboardType: TextInputType.datetime,
+                      readOnly: true,
+                      suffixIcon: Icons.calendar_month,
+                      onTap: _pickDateOfBirth,
                     ),
                   ),
                 ],
@@ -802,8 +894,11 @@ class _Field extends StatelessWidget {
     this.hint,
     this.required = false,
     this.numeric = false,
+    this.readOnly = false,
     this.maxLines = 1,
     this.keyboardType,
+    this.suffixIcon,
+    this.onTap,
   });
 
   final TextEditingController controller;
@@ -811,8 +906,11 @@ class _Field extends StatelessWidget {
   final String? hint;
   final bool required;
   final bool numeric;
+  final bool readOnly;
   final int maxLines;
   final TextInputType? keyboardType;
+  final IconData? suffixIcon;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -822,6 +920,8 @@ class _Field extends StatelessWidget {
         controller: controller,
         maxLines: maxLines,
         keyboardType: keyboardType,
+        readOnly: readOnly,
+        onTap: onTap,
         style: const TextStyle(color: Colors.white),
         validator: (value) {
           final text = value?.trim() ?? '';
@@ -836,7 +936,11 @@ class _Field extends StatelessWidget {
           }
           return null;
         },
-        decoration: _inputDecoration(label, hint),
+        decoration: _inputDecoration(label, hint).copyWith(
+          suffixIcon: suffixIcon == null
+              ? null
+              : Icon(suffixIcon, color: _ProfileColors.softGold),
+        ),
       ),
     );
   }
