@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'api_client.dart';
 import 'bottom_nav.dart';
 import 'exercise_list.dart';
 
@@ -118,12 +119,43 @@ class _HeroSection extends StatefulWidget {
 }
 
 class _HeroSectionState extends State<_HeroSection> {
-  static const _slides = [
-    'assets/images/slider_dumbbell.png',
-    'assets/images/slider_barbell.png',
-    'assets/images/slider_ropes.png',
-  ];
+  late final Future<List<MobileAppBanner>> _bannerFuture;
 
+  @override
+  void initState() {
+    super.initState();
+    _bannerFuture = AurexApiClient.fetchHomeBanners();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<MobileAppBanner>>(
+      future: _bannerFuture,
+      builder: (context, snapshot) {
+        final banners = snapshot.data ?? const <MobileAppBanner>[];
+        final slides = banners.isEmpty
+            ? _HeroSlideData.fallbackSlides
+            : banners.map(_HeroSlideData.fromBanner).toList();
+
+        return _HeroCarousel(
+          key: ValueKey(slides.map((slide) => slide.identity).join('|')),
+          slides: slides,
+        );
+      },
+    );
+  }
+}
+
+class _HeroCarousel extends StatefulWidget {
+  const _HeroCarousel({super.key, required this.slides});
+
+  final List<_HeroSlideData> slides;
+
+  @override
+  State<_HeroCarousel> createState() => _HeroCarouselState();
+}
+
+class _HeroCarouselState extends State<_HeroCarousel> {
   final _controller = PageController();
   Timer? _timer;
   int _currentIndex = 0;
@@ -136,13 +168,25 @@ class _HeroSectionState extends State<_HeroSection> {
         return;
       }
 
-      final nextIndex = (_currentIndex + 1) % _slides.length;
+      if (widget.slides.length < 2) {
+        return;
+      }
+
+      final nextIndex = (_currentIndex + 1) % widget.slides.length;
       _controller.animateToPage(
         nextIndex,
         duration: const Duration(milliseconds: 450),
         curve: Curves.easeOutCubic,
       );
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _HeroCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_currentIndex >= widget.slides.length) {
+      _currentIndex = 0;
+    }
   }
 
   @override
@@ -160,54 +204,185 @@ class _HeroSectionState extends State<_HeroSection> {
         children: [
           PageView.builder(
             controller: _controller,
-            itemCount: _slides.length,
+            itemCount: widget.slides.length,
             onPageChanged: (index) {
               setState(() {
                 _currentIndex = index;
               });
             },
             itemBuilder: (context, index) {
+              return _HeroSlide(slide: widget.slides[index]);
+            },
+          ),
+          if (widget.slides.length > 1)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 26,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (var index = 0; index < widget.slides.length; index++)
+                    GestureDetector(
+                      onTap: () {
+                        _controller.animateToPage(
+                          index,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOut,
+                        );
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        width: _currentIndex == index ? 10 : 8,
+                        height: _currentIndex == index ? 10 : 8,
+                        margin: const EdgeInsets.symmetric(horizontal: 6),
+                        decoration: BoxDecoration(
+                          color: _currentIndex == index
+                              ? _LandingColors.softGold
+                              : Colors.white.withValues(alpha: 0.28),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeroSlide extends StatelessWidget {
+  const _HeroSlide({required this.slide});
+
+  final _HeroSlideData slide;
+
+  @override
+  Widget build(BuildContext context) {
+    final image = slide.imageUrl.isEmpty
+        ? Image.asset(
+            slide.fallbackAsset,
+            fit: BoxFit.cover,
+            alignment: Alignment.topCenter,
+          )
+        : Image.network(
+            slide.imageUrl,
+            fit: BoxFit.cover,
+            alignment: Alignment.topCenter,
+            errorBuilder: (context, error, stackTrace) {
               return Image.asset(
-                _slides[index],
+                slide.fallbackAsset,
                 fit: BoxFit.cover,
                 alignment: Alignment.topCenter,
               );
             },
+          );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [slide.backgroundColor, _LandingColors.black],
+            ),
           ),
+        ),
+        image,
+        if (slide.title.isNotEmpty || slide.subtitle.isNotEmpty)
           Positioned(
-            left: 0,
-            right: 0,
-            bottom: 26,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+            left: 30,
+            right: 30,
+            bottom: 60,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                for (var index = 0; index < _slides.length; index++)
-                  GestureDetector(
-                    onTap: () {
-                      _controller.animateToPage(
-                        index,
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeOut,
-                      );
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 220),
-                      width: _currentIndex == index ? 10 : 8,
-                      height: _currentIndex == index ? 10 : 8,
-                      margin: const EdgeInsets.symmetric(horizontal: 6),
-                      decoration: BoxDecoration(
-                        color: _currentIndex == index
-                            ? _LandingColors.softGold
-                            : Colors.white.withValues(alpha: 0.28),
-                        shape: BoxShape.circle,
-                      ),
+                if (slide.title.isNotEmpty)
+                  Text(
+                    slide.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                      height: 1.02,
                     ),
                   ),
+                if (slide.subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    slide.subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.86),
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      height: 1.22,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
-        ],
-      ),
+      ],
+    );
+  }
+}
+
+class _HeroSlideData {
+  const _HeroSlideData({
+    required this.imageUrl,
+    required this.fallbackAsset,
+    required this.title,
+    required this.subtitle,
+    required this.backgroundColor,
+  });
+
+  final String imageUrl;
+  final String fallbackAsset;
+  final String title;
+  final String subtitle;
+  final Color backgroundColor;
+
+  String get identity => imageUrl.isEmpty ? fallbackAsset : imageUrl;
+
+  static const fallbackSlides = [
+    _HeroSlideData(
+      imageUrl: '',
+      fallbackAsset: 'assets/images/slider_dumbbell.png',
+      title: '',
+      subtitle: '',
+      backgroundColor: _LandingColors.black,
+    ),
+    _HeroSlideData(
+      imageUrl: '',
+      fallbackAsset: 'assets/images/slider_barbell.png',
+      title: '',
+      subtitle: '',
+      backgroundColor: _LandingColors.black,
+    ),
+    _HeroSlideData(
+      imageUrl: '',
+      fallbackAsset: 'assets/images/slider_ropes.png',
+      title: '',
+      subtitle: '',
+      backgroundColor: _LandingColors.black,
+    ),
+  ];
+
+  factory _HeroSlideData.fromBanner(MobileAppBanner banner) {
+    return _HeroSlideData(
+      imageUrl: banner.imageUrl,
+      fallbackAsset: 'assets/images/slider_dumbbell.png',
+      title: banner.title,
+      subtitle: banner.subtitle,
+      backgroundColor: _colorFromHex(banner.backgroundColor),
     );
   }
 }
@@ -369,4 +544,20 @@ class _LandingColors {
 
   static const black = Color(0xFF030303);
   static const softGold = Color(0xFFE9C460);
+}
+
+Color _colorFromHex(String value) {
+  final hex = value.trim().replaceFirst('#', '');
+  final normalized = switch (hex.length) {
+    6 => 'FF$hex',
+    8 => hex,
+    _ => '',
+  };
+
+  final colorValue = int.tryParse(normalized, radix: 16);
+  if (colorValue == null) {
+    return _LandingColors.black;
+  }
+
+  return Color(colorValue);
 }

@@ -25,6 +25,15 @@ class AurexApiClient {
     return items.map(MobileExercise.fromJson).toList();
   }
 
+  static Future<List<MobileAppBanner>> fetchHomeBanners() async {
+    final items = await _getList('/mobile-app', 'banners');
+    final now = DateTime.now();
+    return items
+        .map(MobileAppBanner.fromJson)
+        .where((banner) => banner.isVisibleHomeBanner(now))
+        .toList();
+  }
+
   static Future<MobileProfile> fetchProfile() async {
     final payload = await _get('/me');
     return MobileProfile.fromPayload(payload);
@@ -380,6 +389,71 @@ class MobileExercise {
   }
 }
 
+class MobileAppBanner {
+  const MobileAppBanner({
+    required this.title,
+    required this.subtitle,
+    required this.bannerType,
+    required this.publishStatus,
+    required this.showInMobileApp,
+    required this.imageUrl,
+    required this.backgroundStyle,
+    required this.backgroundColor,
+    required this.accentColor,
+    required this.startDate,
+    required this.endDate,
+  });
+
+  final String title;
+  final String subtitle;
+  final String bannerType;
+  final String publishStatus;
+  final bool showInMobileApp;
+  final String imageUrl;
+  final String backgroundStyle;
+  final String backgroundColor;
+  final String accentColor;
+  final DateTime? startDate;
+  final DateTime? endDate;
+
+  factory MobileAppBanner.fromJson(Map<String, dynamic> json) {
+    return MobileAppBanner(
+      title: _string(json['title']),
+      subtitle: _string(json['subtitle']),
+      bannerType: _string(json['banner_type']),
+      publishStatus: _string(json['publish_status']),
+      showInMobileApp: json['show_in_mobile_app'] == true ||
+          json['show_in_mobile_app'] == 1 ||
+          json['show_in_mobile_app'] == '1',
+      imageUrl: AurexApiClient.mediaUrl(_string(json['image_url'])),
+      backgroundStyle: _string(json['background_style']),
+      backgroundColor: _string(json['background_color'], fallback: '#050505'),
+      accentColor: _string(json['accent_color'], fallback: '#C8A13A'),
+      startDate: _parseDate(json['start_date']),
+      endDate: _parseDate(json['end_date']),
+    );
+  }
+
+  bool isVisibleHomeBanner(DateTime now) {
+    if (bannerType != 'Home Banner' ||
+        publishStatus != 'Published' ||
+        !showInMobileApp) {
+      return false;
+    }
+
+    final today = DateTime(now.year, now.month, now.day);
+    if (startDate != null && startDate!.isAfter(today)) {
+      return false;
+    }
+
+    if (endDate != null && endDate!.isBefore(today)) {
+      return false;
+    }
+
+    return true;
+  }
+}
+
 String _string(Object? value, {String fallback = ''}) {
   if (value == null) {
     return fallback;
@@ -428,4 +502,14 @@ List<Map<String, dynamic>> _mapList(Object? value) {
   }
 
   return const [];
+}
+
+DateTime? _parseDate(Object? value) {
+  final text = _string(value);
+  if (text.isEmpty) {
+    return null;
+  }
+
+  final normalized = text.length >= 10 ? text.substring(0, 10) : text;
+  return DateTime.tryParse(normalized);
 }
