@@ -38,14 +38,16 @@ class _WorkoutsPageState extends State<WorkoutsPage> {
     _loadWorkouts();
   }
 
-  Future<void> _loadWorkouts() async {
+  Future<void> _loadWorkouts({bool forceRefresh = false}) async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
-      final workouts = await AurexApiClient.fetchWorkouts();
+      final workouts = await AurexApiClient.fetchWorkouts(
+        forceRefresh: forceRefresh,
+      );
       if (!mounted) return;
 
       setState(() {
@@ -88,7 +90,7 @@ class _WorkoutsPageState extends State<WorkoutsPage> {
             RefreshIndicator(
               color: _WorkoutColors.gold,
               backgroundColor: _WorkoutColors.black,
-              onRefresh: _loadWorkouts,
+              onRefresh: () => _loadWorkouts(forceRefresh: true),
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(32, 52, 32, 126),
                 children: [
@@ -105,10 +107,7 @@ class _WorkoutsPageState extends State<WorkoutsPage> {
                   const SizedBox(height: 10),
                   const Text(
                     'Train smart. Stay consistent. See results.',
-                    style: TextStyle(
-                      color: _WorkoutColors.muted,
-                      fontSize: 19,
-                    ),
+                    style: TextStyle(color: _WorkoutColors.muted, fontSize: 19),
                   ),
                   const SizedBox(height: 26),
                   const _SearchAndFilter(),
@@ -128,7 +127,7 @@ class _WorkoutsPageState extends State<WorkoutsPage> {
                   _WorkoutContentState(
                     isLoading: _isLoading,
                     error: _error,
-                    onRetry: _loadWorkouts,
+                    onRetry: () => _loadWorkouts(forceRefresh: true),
                     child: _ProgramCarousel(
                       workouts: _workouts.take(6).toList(),
                     ),
@@ -143,7 +142,7 @@ class _WorkoutsPageState extends State<WorkoutsPage> {
                   _WorkoutContentState(
                     isLoading: _isLoading,
                     error: _error,
-                    onRetry: _loadWorkouts,
+                    onRetry: () => _loadWorkouts(forceRefresh: true),
                     child: _PopularWorkoutList(items: filteredWorkouts),
                   ),
                 ],
@@ -171,7 +170,7 @@ class _TopBar extends StatelessWidget {
       children: [
         const Spacer(),
         Image.asset(
-          'assets/images/aurex_logo_app.png',
+          'assets/images/placeholder.png',
           width: 176,
           fit: BoxFit.contain,
         ),
@@ -398,7 +397,11 @@ class _WorkoutContentState extends StatelessWidget {
     }
 
     if (error != null) {
-      return _MessagePanel(message: error!, actionLabel: 'Retry', onTap: onRetry);
+      return _MessagePanel(
+        message: error!,
+        actionLabel: 'Retry',
+        onTap: onRetry,
+      );
     }
 
     return child;
@@ -406,11 +409,7 @@ class _WorkoutContentState extends StatelessWidget {
 }
 
 class _MessagePanel extends StatelessWidget {
-  const _MessagePanel({
-    required this.message,
-    this.actionLabel,
-    this.onTap,
-  });
+  const _MessagePanel({required this.message, this.actionLabel, this.onTap});
 
   final String message;
   final String? actionLabel;

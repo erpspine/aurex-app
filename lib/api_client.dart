@@ -15,23 +15,75 @@ class AurexApiException implements Exception {
 class AurexApiClient {
   const AurexApiClient._();
 
-  static Future<List<MobileWorkout>> fetchWorkouts() async {
-    final items = await _getList('/workouts', 'workouts');
-    return items.map(MobileWorkout.fromJson).toList();
+  static Future<List<MobileWorkout>>? _workoutsCache;
+  static Future<List<MobileExercise>>? _exercisesCache;
+  static Future<List<MobileEquipment>>? _equipmentCache;
+  static Future<List<MobileWorkoutLevel>>? _workoutLevelsCache;
+  static Future<List<MobileAppBanner>>? _homeBannersCache;
+
+  static Future<List<MobileWorkout>> fetchWorkouts({
+    bool forceRefresh = false,
+  }) {
+    if (forceRefresh || _workoutsCache == null) {
+      _workoutsCache = _fetchWorkouts().catchError((Object error) {
+        _workoutsCache = null;
+        throw error;
+      });
+    }
+
+    return _workoutsCache!;
   }
 
-  static Future<List<MobileExercise>> fetchExercises() async {
-    final items = await _getList('/exercises', 'exercises');
-    return items.map(MobileExercise.fromJson).toList();
+  static Future<List<MobileExercise>> fetchExercises({
+    bool forceRefresh = false,
+  }) {
+    if (forceRefresh || _exercisesCache == null) {
+      _exercisesCache = _fetchExercises().catchError((Object error) {
+        _exercisesCache = null;
+        throw error;
+      });
+    }
+
+    return _exercisesCache!;
   }
 
-  static Future<List<MobileAppBanner>> fetchHomeBanners() async {
-    final items = await _getList('/mobile-app', 'banners');
-    final now = DateTime.now();
-    return items
-        .map(MobileAppBanner.fromJson)
-        .where((banner) => banner.isVisibleHomeBanner(now))
-        .toList();
+  static Future<List<MobileEquipment>> fetchEquipment({
+    bool forceRefresh = false,
+  }) {
+    if (forceRefresh || _equipmentCache == null) {
+      _equipmentCache = _fetchEquipment().catchError((Object error) {
+        _equipmentCache = null;
+        throw error;
+      });
+    }
+
+    return _equipmentCache!;
+  }
+
+  static Future<List<MobileWorkoutLevel>> fetchWorkoutLevels({
+    bool forceRefresh = false,
+  }) {
+    if (forceRefresh || _workoutLevelsCache == null) {
+      _workoutLevelsCache = _fetchWorkoutLevels().catchError((Object error) {
+        _workoutLevelsCache = null;
+        throw error;
+      });
+    }
+
+    return _workoutLevelsCache!;
+  }
+
+  static Future<List<MobileAppBanner>> fetchHomeBanners({
+    bool forceRefresh = false,
+  }) {
+    if (forceRefresh || _homeBannersCache == null) {
+      _homeBannersCache = _fetchHomeBanners().catchError((Object error) {
+        _homeBannersCache = null;
+        throw error;
+      });
+    }
+
+    return _homeBannersCache!;
   }
 
   static Future<MobileProfile> fetchProfile() async {
@@ -99,6 +151,35 @@ class AurexApiClient {
     }
 
     throw const AurexApiException('The server returned an invalid response.');
+  }
+
+  static Future<List<MobileWorkout>> _fetchWorkouts() async {
+    final items = await _getList('/workouts', 'workouts');
+    return items.map(MobileWorkout.fromJson).toList();
+  }
+
+  static Future<List<MobileExercise>> _fetchExercises() async {
+    final items = await _getList('/exercises', 'exercises');
+    return items.map(MobileExercise.fromJson).toList();
+  }
+
+  static Future<List<MobileEquipment>> _fetchEquipment() async {
+    final items = await _getList('/equipment', 'equipment');
+    return items.map(MobileEquipment.fromJson).toList();
+  }
+
+  static Future<List<MobileWorkoutLevel>> _fetchWorkoutLevels() async {
+    final items = await _getList('/workout-levels', 'workout_levels');
+    return items.map(MobileWorkoutLevel.fromJson).toList();
+  }
+
+  static Future<List<MobileAppBanner>> _fetchHomeBanners() async {
+    final items = await _getList('/mobile-app', 'banners');
+    final now = DateTime.now();
+    return items
+        .map(MobileAppBanner.fromJson)
+        .where((banner) => banner.isVisibleHomeBanner(now))
+        .toList();
   }
 
   static Future<Map<String, dynamic>> _get(String path) async {
@@ -302,6 +383,8 @@ class MobileWorkout {
     required this.description,
     required this.coverImageUrl,
     required this.exercises,
+    required this.publishStatus,
+    required this.showInMobileApp,
   });
 
   final String id;
@@ -314,8 +397,11 @@ class MobileWorkout {
   final String description;
   final String coverImageUrl;
   final List<Map<String, dynamic>> exercises;
+  final String publishStatus;
+  final bool showInMobileApp;
 
   int get exerciseCount => exercises.length;
+  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
 
   factory MobileWorkout.fromJson(Map<String, dynamic> json) {
     return MobileWorkout(
@@ -327,8 +413,13 @@ class MobileWorkout {
       duration: _duration(json['duration']),
       caloriesBurn: _string(json['calories_burn']),
       description: _string(json['description']),
-      coverImageUrl: AurexApiClient.mediaUrl(_string(json['cover_image_url'])),
+      coverImageUrl: _versionedMediaUrl(
+        json['cover_image_url'],
+        json['updated_at'],
+      ),
       exercises: _mapList(json['exercises']),
+      publishStatus: _string(json['publish_status']),
+      showInMobileApp: _bool(json['show_in_mobile_app']),
     );
   }
 }
@@ -350,6 +441,8 @@ class MobileExercise {
     required this.videoUrl,
     required this.instructions,
     required this.muscleTags,
+    required this.publishStatus,
+    required this.showInMobileApp,
   });
 
   final String id;
@@ -367,6 +460,10 @@ class MobileExercise {
   final String videoUrl;
   final List<String> instructions;
   final List<String> muscleTags;
+  final String publishStatus;
+  final bool showInMobileApp;
+
+  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
 
   factory MobileExercise.fromJson(Map<String, dynamic> json) {
     return MobileExercise(
@@ -381,10 +478,83 @@ class MobileExercise {
       reps: _string(json['reps'], fallback: '8-12 Reps'),
       restTime: _duration(json['rest_time'], fallback: '45 sec'),
       description: _string(json['description']),
-      imageUrl: AurexApiClient.mediaUrl(_string(json['image_url'])),
-      videoUrl: AurexApiClient.mediaUrl(_string(json['video_url'])),
+      imageUrl: _versionedMediaUrl(json['image_url'], json['updated_at']),
+      videoUrl: _versionedMediaUrl(json['video_url'], json['updated_at']),
       instructions: _stringList(json['instructions']),
       muscleTags: _stringList(json['muscle_tags']),
+      publishStatus: _string(json['publish_status']),
+      showInMobileApp: _bool(json['show_in_mobile_app']),
+    );
+  }
+}
+
+class MobileEquipment {
+  const MobileEquipment({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.primaryMuscleGroup,
+    required this.supportedLevel,
+    required this.publishStatus,
+    required this.showInMobileApp,
+  });
+
+  final String id;
+  final String name;
+  final String category;
+  final String primaryMuscleGroup;
+  final String supportedLevel;
+  final String publishStatus;
+  final bool showInMobileApp;
+
+  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
+
+  factory MobileEquipment.fromJson(Map<String, dynamic> json) {
+    return MobileEquipment(
+      id: _string(json['id']),
+      name: _string(json['name'], fallback: 'Equipment'),
+      category: _string(json['category']),
+      primaryMuscleGroup: _string(json['primary_muscle_group']),
+      supportedLevel: _string(json['supported_level']),
+      publishStatus: _string(json['publish_status']),
+      showInMobileApp: _bool(json['show_in_mobile_app']),
+    );
+  }
+}
+
+class MobileWorkoutLevel {
+  const MobileWorkoutLevel({
+    required this.id,
+    required this.name,
+    required this.difficultyRank,
+    required this.intensity,
+    required this.coverImageUrl,
+    required this.publishStatus,
+    required this.showInMobileApp,
+  });
+
+  final String id;
+  final String name;
+  final int difficultyRank;
+  final String intensity;
+  final String coverImageUrl;
+  final String publishStatus;
+  final bool showInMobileApp;
+
+  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
+
+  factory MobileWorkoutLevel.fromJson(Map<String, dynamic> json) {
+    return MobileWorkoutLevel(
+      id: _string(json['id']),
+      name: _string(json['name'], fallback: 'Level'),
+      difficultyRank: int.tryParse(_string(json['difficulty_rank'])) ?? 0,
+      intensity: _string(json['intensity']),
+      coverImageUrl: _versionedMediaUrl(
+        json['cover_image_url'],
+        json['updated_at'],
+      ),
+      publishStatus: _string(json['publish_status']),
+      showInMobileApp: _bool(json['show_in_mobile_app']),
     );
   }
 }
@@ -422,10 +592,8 @@ class MobileAppBanner {
       subtitle: _string(json['subtitle']),
       bannerType: _string(json['banner_type']),
       publishStatus: _string(json['publish_status']),
-      showInMobileApp: json['show_in_mobile_app'] == true ||
-          json['show_in_mobile_app'] == 1 ||
-          json['show_in_mobile_app'] == '1',
-      imageUrl: AurexApiClient.mediaUrl(_string(json['image_url'])),
+      showInMobileApp: _bool(json['show_in_mobile_app']),
+      imageUrl: _versionedMediaUrl(json['image_url'], json['updated_at']),
       backgroundStyle: _string(json['background_style']),
       backgroundColor: _string(json['background_color'], fallback: '#050505'),
       accentColor: _string(json['accent_color'], fallback: '#C8A13A'),
@@ -479,6 +647,28 @@ String _date(Object? value) {
   }
 
   return text;
+}
+
+String _versionedMediaUrl(Object? value, Object? updatedAt) {
+  final url = AurexApiClient.mediaUrl(_string(value));
+  final version = _string(updatedAt).replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+
+  if (url.isEmpty || version.isEmpty) {
+    return url;
+  }
+
+  final uri = Uri.tryParse(url);
+  if (uri == null) {
+    return url;
+  }
+
+  return uri
+      .replace(queryParameters: {...uri.queryParameters, 'v': version})
+      .toString();
+}
+
+bool _bool(Object? value) {
+  return value == true || value == 1 || value == '1';
 }
 
 List<String> _stringList(Object? value) {

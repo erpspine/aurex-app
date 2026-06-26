@@ -52,14 +52,16 @@ class _ExerciseDetailListPageState extends State<ExerciseDetailListPage> {
     _loadExercises();
   }
 
-  Future<void> _loadExercises() async {
+  Future<void> _loadExercises({bool forceRefresh = false}) async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
-      final exercises = await AurexApiClient.fetchExercises();
+      final exercises = await AurexApiClient.fetchExercises(
+        forceRefresh: forceRefresh,
+      );
       if (!mounted) return;
 
       setState(() {
@@ -86,13 +88,16 @@ class _ExerciseDetailListPageState extends State<ExerciseDetailListPage> {
       final matchesGroup = widget.groupType == 'Body Part'
           ? _normalize(exercise.bodyPart) == groupTitle
           : equipment.isNotEmpty &&
-              (equipment.contains(groupTitle) || groupTitle.contains(equipment));
+                (equipment.contains(groupTitle) ||
+                    groupTitle.contains(equipment));
 
       final matchesLevel =
-          level == 'All Levels' || _normalize(exercise.level) == _normalize(level);
+          level == 'All Levels' ||
+          _normalize(exercise.level) == _normalize(level);
 
       final matchesMuscle =
-          muscle == 'All' || _normalize(exercise.bodyPart) == _normalize(muscle);
+          muscle == 'All' ||
+          _normalize(exercise.bodyPart) == _normalize(muscle);
 
       return matchesGroup && matchesLevel && matchesMuscle;
     }).toList();
@@ -110,7 +115,7 @@ class _ExerciseDetailListPageState extends State<ExerciseDetailListPage> {
             RefreshIndicator(
               color: _DetailColors.gold,
               backgroundColor: _DetailColors.black,
-              onRefresh: _loadExercises,
+              onRefresh: () => _loadExercises(forceRefresh: true),
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(24, 18, 24, 122),
                 children: [
@@ -159,11 +164,8 @@ class _ExerciseDetailListPageState extends State<ExerciseDetailListPage> {
                   _ExerciseContentState(
                     isLoading: _isLoading,
                     error: _error,
-                    onRetry: _loadExercises,
-                    child: _ExerciseRows(
-                      exercises: filteredExercises,
-                      groupImage: widget.image,
-                    ),
+                    onRetry: () => _loadExercises(forceRefresh: true),
+                    child: _ExerciseRows(exercises: filteredExercises),
                   ),
                 ],
               ),
@@ -194,7 +196,7 @@ class _TopBar extends StatelessWidget {
         ),
         const Spacer(),
         Image.asset(
-          'assets/images/aurex_logo_app.png',
+          'assets/images/placeholder.png',
           width: 176,
           fit: BoxFit.contain,
         ),
@@ -542,12 +544,18 @@ class _ExerciseContentState extends StatelessWidget {
     if (isLoading) {
       return const SizedBox(
         height: 180,
-        child: Center(child: CircularProgressIndicator(color: _DetailColors.gold)),
+        child: Center(
+          child: CircularProgressIndicator(color: _DetailColors.gold),
+        ),
       );
     }
 
     if (error != null) {
-      return _MessagePanel(message: error!, actionLabel: 'Retry', onTap: onRetry);
+      return _MessagePanel(
+        message: error!,
+        actionLabel: 'Retry',
+        onTap: onRetry,
+      );
     }
 
     return child;
@@ -595,10 +603,9 @@ class _MessagePanel extends StatelessWidget {
 }
 
 class _ExerciseRows extends StatelessWidget {
-  const _ExerciseRows({required this.exercises, required this.groupImage});
+  const _ExerciseRows({required this.exercises});
 
   final List<MobileExercise> exercises;
-  final String groupImage;
 
   @override
   Widget build(BuildContext context) {
@@ -611,7 +618,7 @@ class _ExerciseRows extends StatelessWidget {
     return Column(
       children: [
         for (final exercise in exercises) ...[
-          _ExerciseRow(exercise, fallbackImage: groupImage),
+          _ExerciseRow(exercise),
           const SizedBox(height: 12),
         ],
       ],
@@ -620,10 +627,9 @@ class _ExerciseRows extends StatelessWidget {
 }
 
 class _ExerciseRow extends StatelessWidget {
-  const _ExerciseRow(this.exercise, {required this.fallbackImage});
+  const _ExerciseRow(this.exercise);
 
   final MobileExercise exercise;
-  final String fallbackImage;
 
   @override
   Widget build(BuildContext context) {
@@ -640,153 +646,182 @@ class _ExerciseRow extends StatelessWidget {
           ),
         );
       },
-      child: Container(
-        height: 188,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.035),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(
-                width: 178,
-                height: double.infinity,
-                child: _ExerciseImage(
-                  imageUrl: exercise.imageUrl,
-                  fallbackImage: fallbackImage,
-                ),
-              ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 360;
+          final imageWidth = compact ? 132.0 : 178.0;
+          final gap = compact ? 12.0 : 18.0;
+
+          return Container(
+            height: 188,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.035),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
             ),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    width: imageWidth,
+                    height: double.infinity,
+                    child: _ExerciseImage(imageUrl: exercise.imageUrl),
+                  ),
+                ),
+                SizedBox(width: gap),
+                Expanded(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          exercise.name,
-                          style: const TextStyle(
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              exercise.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 21,
+                                fontWeight: FontWeight.w900,
+                                height: 1.1,
+                              ),
+                            ),
+                          ),
+                          const Icon(
+                            Icons.bookmark_border,
                             color: Colors.white,
-                            fontSize: 21,
-                            fontWeight: FontWeight.w900,
-                            height: 1.1,
+                            size: 28,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.accessibility_new_rounded,
+                            color: _DetailColors.gold,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              exercise.bodyPart.isEmpty
+                                  ? exercise.category
+                                  : exercise.bodyPart,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 20,
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              _Meta(Icons.schedule, exercise.restTime),
+                              const SizedBox(width: 10),
+                              const _Separator(),
+                              const SizedBox(width: 10),
+                              _Meta(
+                                Icons.view_comfy_alt_rounded,
+                                exercise.sets,
+                              ),
+                              const SizedBox(width: 10),
+                              const _Separator(),
+                              const SizedBox(width: 10),
+                              _Meta(Icons.restaurant_rounded, exercise.reps),
+                            ],
                           ),
                         ),
                       ),
-                      const Icon(
-                        Icons.bookmark_border,
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.accessibility_new_rounded,
-                        color: _DetailColors.gold,
-                        size: 22,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        exercise.bodyPart.isEmpty
-                            ? exercise.category
-                            : exercise.bodyPart,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      _Meta(Icons.schedule, exercise.restTime),
-                      const _Separator(),
-                      _Meta(Icons.view_comfy_alt_rounded, exercise.sets),
-                      const _Separator(),
-                      _Meta(Icons.restaurant_rounded, exercise.reps),
-                    ],
-                  ),
-                  const Spacer(),
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 11,
-                          vertical: 7,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.06),
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.bar_chart_rounded,
-                              color: exercise.level == 'Beginner'
-                                  ? Colors.greenAccent
-                                  : _DetailColors.muted,
-                              size: 18,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              exercise.level,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
+                      const Spacer(),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: compact ? 8 : 11,
+                                vertical: 7,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.06),
+                                borderRadius: BorderRadius.circular(9),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.max,
+                                children: [
+                                  Icon(
+                                    Icons.bar_chart_rounded,
+                                    color: exercise.level == 'Beginner'
+                                        ? Colors.greenAccent
+                                        : _DetailColors.muted,
+                                    size: 18,
+                                  ),
+                                  SizedBox(width: compact ? 4 : 6),
+                                  Flexible(
+                                    child: Text(
+                                      exercise.level,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                      const Spacer(),
-                      const Icon(
-                        Icons.chevron_right,
-                        color: _DetailColors.gold,
-                        size: 34,
+                          ),
+                          SizedBox(width: compact ? 4 : 8),
+                          const Icon(
+                            Icons.chevron_right,
+                            color: _DetailColors.gold,
+                            size: 34,
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 }
 
 class _ExerciseImage extends StatelessWidget {
-  const _ExerciseImage({required this.imageUrl, required this.fallbackImage});
+  const _ExerciseImage({required this.imageUrl});
 
   final String imageUrl;
-  final String fallbackImage;
 
   @override
   Widget build(BuildContext context) {
+    const placeholder = 'assets/images/placeholder.png';
+
     if (imageUrl.isEmpty) {
-      return Image.asset(fallbackImage, fit: BoxFit.cover);
+      return Image.asset(placeholder, fit: BoxFit.contain);
     }
 
     return Image.network(
       imageUrl,
       fit: BoxFit.cover,
       errorBuilder: (context, error, stackTrace) {
-        return Image.asset(fallbackImage, fit: BoxFit.cover);
+        return Image.asset(placeholder, fit: BoxFit.contain);
       },
     );
   }

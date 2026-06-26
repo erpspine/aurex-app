@@ -148,7 +148,7 @@ class _TopBar extends StatelessWidget {
       children: [
         const Spacer(),
         Image.asset(
-          'assets/images/aurex_logo_app.png',
+          'assets/images/placeholder.png',
           width: 176,
           fit: BoxFit.contain,
         ),

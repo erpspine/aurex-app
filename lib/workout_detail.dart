@@ -141,7 +141,7 @@ class _HeroHeader extends StatelessWidget {
                 ),
                 const Spacer(),
                 Image.asset(
-                  'assets/images/aurex_logo_app.png',
+                  'assets/images/placeholder.png',
                   width: 176,
                   fit: BoxFit.contain,
                 ),
