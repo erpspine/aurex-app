@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'bottom_nav.dart';
+import 'workout_plan_detail.dart';
 
 class WorkoutsPage extends StatefulWidget {
   const WorkoutsPage({super.key});
@@ -465,9 +466,12 @@ class _ProgramCarousel extends StatelessWidget {
           final workout = workouts[index];
           return SizedBox(
             width: 246,
-            child: ClipRRect(
+            child: InkWell(
+              onTap: () => _openWorkout(context, workout),
               borderRadius: BorderRadius.circular(14),
-              child: Stack(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Stack(
                 fit: StackFit.expand,
                 children: [
                   _WorkoutImage(
@@ -574,6 +578,7 @@ class _ProgramCarousel extends StatelessWidget {
                     ),
                   ),
                 ],
+                ),
               ),
             ),
           );
@@ -679,7 +684,10 @@ class _PopularWorkoutRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return InkWell(
+      onTap: () => _openWorkout(context, item),
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
       height: 126,
       child: Row(
         children: [
@@ -747,6 +755,7 @@ class _PopularWorkoutRow extends StatelessWidget {
             size: 36,
           ),
         ],
+      ),
       ),
     );
   }
@@ -819,6 +828,14 @@ BoxDecoration _cardDecoration() {
     color: Colors.white.withValues(alpha: 0.035),
     borderRadius: BorderRadius.circular(14),
     border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+  );
+}
+
+void _openWorkout(BuildContext context, MobileWorkout workout) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => WorkoutPlanDetailPage(workout: workout),
+    ),
   );
 }
 

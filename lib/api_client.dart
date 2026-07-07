@@ -382,6 +382,7 @@ class MobileWorkout {
     required this.caloriesBurn,
     required this.description,
     required this.coverImageUrl,
+    required this.workoutDays,
     required this.exercises,
     required this.publishStatus,
     required this.showInMobileApp,
@@ -396,11 +397,16 @@ class MobileWorkout {
   final String caloriesBurn;
   final String description;
   final String coverImageUrl;
+  final List<MobileWorkoutDay> workoutDays;
   final List<Map<String, dynamic>> exercises;
   final String publishStatus;
   final bool showInMobileApp;
 
-  int get exerciseCount => exercises.length;
+  int get dayCount => workoutDays.length;
+  int get exerciseCount => workoutDays.fold<int>(
+        0,
+        (total, day) => total + day.exercises.length,
+      );
   bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
 
   factory MobileWorkout.fromJson(Map<String, dynamic> json) {
@@ -417,9 +423,33 @@ class MobileWorkout {
         json['cover_image_url'],
         json['updated_at'],
       ),
+      workoutDays: _workoutDays(json['workout_days'], json['exercises']),
       exercises: _mapList(json['exercises']),
       publishStatus: _string(json['publish_status']),
       showInMobileApp: _bool(json['show_in_mobile_app']),
+    );
+  }
+}
+
+class MobileWorkoutDay {
+  const MobileWorkoutDay({
+    required this.dayNumber,
+    required this.title,
+    required this.notes,
+    required this.exercises,
+  });
+
+  final int dayNumber;
+  final String title;
+  final String notes;
+  final List<Map<String, dynamic>> exercises;
+
+  factory MobileWorkoutDay.fromJson(Map<String, dynamic> json, int fallbackDay) {
+    return MobileWorkoutDay(
+      dayNumber: _int(json['day_number'], fallback: fallbackDay),
+      title: _string(json['title'], fallback: 'Day $fallbackDay'),
+      notes: _string(json['notes']),
+      exercises: _mapList(json['exercises']),
     );
   }
 }
@@ -640,6 +670,14 @@ String _duration(Object? value, {String fallback = ''}) {
   return RegExp(r'[a-zA-Z]').hasMatch(text) ? text : '$text min';
 }
 
+int _int(Object? value, {int fallback = 0}) {
+  if (value is int) {
+    return value;
+  }
+
+  return int.tryParse(_string(value)) ?? fallback;
+}
+
 String _date(Object? value) {
   final text = _string(value);
   if (text.length >= 10) {
@@ -692,6 +730,30 @@ List<Map<String, dynamic>> _mapList(Object? value) {
   }
 
   return const [];
+}
+
+List<MobileWorkoutDay> _workoutDays(Object? value, Object? legacyExercises) {
+  final days = _mapList(value);
+  if (days.isNotEmpty) {
+    return [
+      for (var index = 0; index < days.length; index++)
+        MobileWorkoutDay.fromJson(days[index], index + 1),
+    ];
+  }
+
+  final exercises = _mapList(legacyExercises);
+  if (exercises.isEmpty) {
+    return const [];
+  }
+
+  return [
+    MobileWorkoutDay(
+      dayNumber: 1,
+      title: 'Day 1',
+      notes: '',
+      exercises: exercises,
+    ),
+  ];
 }
 
 DateTime? _parseDate(Object? value) {
