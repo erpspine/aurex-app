@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import 'aurex_http.dart';
-import 'landing.dart';
+import 'profile.dart';
 
 const String aurexApiBaseUrl = String.fromEnvironment(
   'AUREX_API_BASE_URL',
@@ -61,7 +61,7 @@ class _AurexLoginScreenState extends State<AurexLoginScreen> {
       AurexSession.current = session;
 
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const AurexLandingScreen()),
+        MaterialPageRoute(builder: (_) => const ProfilePage()),
       );
     } on AurexAuthException catch (error) {
       if (!mounted) return;
@@ -355,6 +355,13 @@ class AurexSession {
   final Map<String, dynamic>? member;
 
   static AurexSession? current;
+
+  bool get isMember {
+    final role = '${user['role'] ?? ''}'.trim().toLowerCase();
+    final userType = '${user['user_type'] ?? ''}'.trim().toLowerCase();
+
+    return role == 'member' || userType == 'member';
+  }
 }
 
 class AurexAuthApi {

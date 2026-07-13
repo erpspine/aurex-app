@@ -114,6 +114,8 @@ class _ProfilePageState extends State<ProfilePage> {
                       const SizedBox(height: 28),
                       _ProfileStats(profile: profile),
                       const SizedBox(height: 28),
+                      _MembershipPanel(profile: profile),
+                      const SizedBox(height: 22),
                       _CompletionCard(percent: profile.completionPercent),
                       const SizedBox(height: 22),
                       _DetailsPanel(profile: profile),
@@ -431,6 +433,85 @@ class _CompletionCard extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MembershipPanel extends StatelessWidget {
+  const _MembershipPanel({required this.profile});
+
+  final MobileProfile profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = [
+      ('Membership Plan', _display(profile.membershipPlanName)),
+      ('Membership Status', _display(profile.membershipStatus)),
+      ('Card Number', _display(profile.cardNumber)),
+      ('Card Status', _display(profile.cardStatus)),
+      ('Renewal Date', _display(profile.renewalDate)),
+      ('Days Before Expiry', _daysText(profile.daysBeforeExpiry)),
+      ('Amount Paid', _display(profile.amountPaid)),
+      ('Payment Method', _display(profile.paymentMethod)),
+      ('Payment Status', _display(profile.paymentStatus)),
+    ];
+
+    return Container(
+      decoration: _panelDecoration(highlight: true),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(22, 20, 22, 4),
+            child: Text(
+              'Membership, Card & Payment',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          for (var i = 0; i < rows.length; i++) ...[
+            _InfoRow(label: rows[i].$1, value: rows[i].$2),
+            if (i < rows.length - 1)
+              Divider(height: 1, color: Colors.white.withValues(alpha: 0.1)),
+          ],
+          if (profile.latestPayment.isNotEmpty) ...[
+            Divider(height: 1, color: Colors.white.withValues(alpha: 0.1)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Latest Payment',
+                    style: TextStyle(
+                      color: _ProfileColors.softGold,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    [
+                      profile.latestPaymentFor,
+                      profile.latestPaymentAmount,
+                      profile.latestPaymentDate,
+                      profile.latestPaymentStatus,
+                    ].where((value) => value.trim().isNotEmpty).join(' • '),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1091,6 +1172,16 @@ String _display(String value) => value.trim().isEmpty ? 'Not set' : value;
 String _unit(String value, String unit) {
   final text = value.trim();
   return text.isEmpty ? 'Not set' : '$text $unit';
+}
+
+String _daysText(int? days) {
+  if (days == null) return 'Not set';
+  if (days < 0) {
+    final expiredDays = days.abs();
+    return 'Expired $expiredDays day${expiredDays == 1 ? '' : 's'} ago';
+  }
+  if (days == 0) return 'Expires today';
+  return '$days day${days == 1 ? '' : 's'} left';
 }
 
 String _option(String value, List<String> options) {

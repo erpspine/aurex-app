@@ -348,6 +348,61 @@ class MobileProfile {
       _string(member['emergency_contact_relationship']);
   String get emergencyPhone => _string(member['emergency_contact_phone']);
   String get memberSince => _date(member['start_date']);
+  String get membershipStatus => _string(member['membership_status']);
+  String get membershipPlanName {
+    final plan = member['membership_plan'];
+    if (plan is Map) {
+      return _string(plan['name']);
+    }
+
+    return '';
+  }
+
+  String get cardNumber {
+    final card = member['card_details'];
+    if (card is Map) {
+      return _string(card['card_number']);
+    }
+
+    return _string(member['access_code']);
+  }
+
+  String get cardStatus {
+    final card = member['card_details'];
+    if (card is Map) {
+      return _string(card['status'], fallback: cardNumber.isEmpty ? 'Not linked' : 'Linked');
+    }
+
+    return cardNumber.isEmpty ? 'Not linked' : 'Linked';
+  }
+
+  String get renewalDate => _date(member['renewal_date'] ?? member['expiry_date']);
+  int? get daysBeforeExpiry {
+    final value = member['days_before_expiry'];
+    if (value is int) return value;
+    return int.tryParse(_string(value));
+  }
+
+  String get amountPaid => _currency(member['amount_paid'], _string(member['currency'], fallback: 'TZS'));
+  String get paymentMethod => _string(member['payment_method']);
+  String get paymentStatus => _string(member['payment_status']);
+  Map<String, dynamic> get latestPayment => member['latest_payment'] is Map
+      ? Map<String, dynamic>.from(member['latest_payment'] as Map)
+      : const {};
+
+  List<Map<String, dynamic>> get recentPayments => member['recent_payments'] is List
+      ? (member['recent_payments'] as List)
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList()
+      : const [];
+
+  String get latestPaymentAmount => latestPayment.isEmpty
+      ? ''
+      : _currency(latestPayment['amount'], _string(latestPayment['currency'], fallback: 'TZS'));
+  String get latestPaymentDate => _date(latestPayment['payment_date']);
+  String get latestPaymentFor => _string(latestPayment['payment_for']);
+  String get latestPaymentStatus => _string(latestPayment['payment_status']);
   String get profilePhotoUrl =>
       AurexApiClient.mediaUrl(_string(user['profile_photo_path']));
 
@@ -685,6 +740,14 @@ String _date(Object? value) {
   }
 
   return text;
+}
+
+String _currency(Object? value, String currency) {
+  final amount = _int(value);
+  return '$currency ${amount.toString().replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+    (match) => ',',
+  )}';
 }
 
 String _versionedMediaUrl(Object? value, Object? updatedAt) {

@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'diet.dart';
-import 'landing.dart';
 import 'profile.dart';
-import 'progress.dart';
 import 'workouts.dart';
 
 class AurexBottomNavigation extends StatelessWidget {
@@ -17,12 +14,11 @@ class AurexBottomNavigation extends StatelessWidget {
   final bool homeIsRoot;
 
   static const _items = [
-    (Icons.home_rounded, 'Home'),
     (Icons.fitness_center_rounded, 'Workouts'),
-    (Icons.bar_chart_rounded, 'Progress'),
-    (Icons.restaurant_rounded, 'Diet'),
     (Icons.person_rounded, 'Profile'),
   ];
+
+  int get _activeIndex => currentIndex == 4 ? 1 : 0;
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +42,7 @@ class AurexBottomNavigation extends StatelessWidget {
                   children: [
                     Icon(
                       _items[index].$1,
-                      color: index == currentIndex
+                      color: index == _activeIndex
                           ? _NavColors.softGold
                           : Colors.white.withValues(alpha: 0.55),
                       size: 30,
@@ -55,7 +51,7 @@ class AurexBottomNavigation extends StatelessWidget {
                     Text(
                       _items[index].$2,
                       style: TextStyle(
-                        color: index == currentIndex
+                        color: index == _activeIndex
                             ? _NavColors.softGold
                             : Colors.white.withValues(alpha: 0.6),
                         fontSize: 13,
@@ -72,8 +68,8 @@ class AurexBottomNavigation extends StatelessWidget {
   }
 
   void _handleTap(BuildContext context, int index) {
-    if (index == 1) {
-      if (currentIndex == 1) {
+    if (index == 0) {
+      if (_activeIndex == 0) {
         return;
       }
 
@@ -84,32 +80,8 @@ class AurexBottomNavigation extends StatelessWidget {
       return;
     }
 
-    if (index == 2) {
-      if (currentIndex == 2) {
-        return;
-      }
-
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ProgressPage()),
-        (route) => false,
-      );
-      return;
-    }
-
-    if (index == 3) {
-      if (currentIndex == 3) {
-        return;
-      }
-
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const DietPage()),
-        (route) => false,
-      );
-      return;
-    }
-
-    if (index == 4) {
-      if (currentIndex == 4) {
+    if (index == 1) {
+      if (_activeIndex == 1) {
         return;
       }
 
@@ -119,20 +91,6 @@ class AurexBottomNavigation extends StatelessWidget {
       );
       return;
     }
-
-    if (index != 0) {
-      return;
-    }
-
-    final navigator = Navigator.of(context);
-    if (homeIsRoot && !navigator.canPop()) {
-      return;
-    }
-
-    navigator.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AurexLandingScreen()),
-      (route) => false,
-    );
   }
 }
 
