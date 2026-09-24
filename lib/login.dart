@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'aurex_http.dart';
 import 'profile.dart';
@@ -60,11 +62,24 @@ class _AurexLoginScreenState extends State<AurexLoginScreen> {
 
       AurexSession.current = session;
 
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const ProfilePage()),
-      );
+      Navigator.of(
+        context,
+      ).pushReplacement(MaterialPageRoute(builder: (_) => const ProfilePage()));
     } on AurexAuthException catch (error) {
       if (!mounted) return;
+
+      if (error.verificationRequired) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => AurexEmailVerificationScreen(
+              email: email,
+              initialMessage: error.message,
+              retryAfter: error.retryAfter,
+            ),
+          ),
+        );
+        return;
+      }
 
       ScaffoldMessenger.of(
         context,
@@ -250,7 +265,13 @@ class _LoginPanel extends StatelessWidget {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
-                onPressed: () {},
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const AurexForgotPasswordScreen(),
+                    ),
+                  );
+                },
                 style: TextButton.styleFrom(
                   foregroundColor: AurexLoginScreen.gold,
                   padding: EdgeInsets.zero,
@@ -286,40 +307,18 @@ class _LoginPanel extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 30),
-            const _DividerLabel(),
-            const SizedBox(height: 22),
-            const Row(
-              children: [
-                Expanded(
-                  child: _SocialButton(
-                    label: 'Google',
-                    mark: 'G',
-                    markColor: Color(0xFF4285F4),
-                  ),
-                ),
-                SizedBox(width: 10),
-                Expanded(
-                  child: _SocialButton(
-                    label: 'Apple',
-                    mark: '●',
-                    markColor: Colors.white,
-                  ),
-                ),
-                SizedBox(width: 10),
-                Expanded(
-                  child: _SocialButton(
-                    label: 'Facebook',
-                    mark: 'f',
-                    markColor: Color(0xFF1877F2),
-                  ),
-                ),
-              ],
-            ),
             const SizedBox(height: 26),
             Center(
               child: TextButton(
-                onPressed: () {},
+                onPressed: isSubmitting
+                    ? null
+                    : () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const AurexSignUpScreen(),
+                          ),
+                        );
+                      },
                 style: TextButton.styleFrom(
                   foregroundColor: AurexLoginScreen.mutedText,
                 ),
@@ -347,6 +346,842 @@ class _LoginPanel extends StatelessWidget {
   }
 }
 
+class AurexSignUpScreen extends StatefulWidget {
+  const AurexSignUpScreen({super.key});
+
+  @override
+  State<AurexSignUpScreen> createState() => _AurexSignUpScreenState();
+}
+
+class _AurexSignUpScreenState extends State<AurexSignUpScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmation = TextEditingController();
+  bool _obscurePassword = true;
+  bool _isSubmitting = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _password.dispose();
+    _confirmation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_formKey.currentState?.validate() != true) return;
+    setState(() => _isSubmitting = true);
+    final email = _email.text.trim();
+    try {
+      final result = await AurexAuthApi.register(
+        name: _name.text.trim(),
+        email: email,
+        password: _password.text,
+        confirmation: _confirmation.text,
+      );
+      if (!mounted) return;
+      _openVerification(
+        email,
+        result['message'] as String?,
+        result['retry_after'] as int? ?? 60,
+      );
+    } on AurexAuthException catch (error) {
+      if (!mounted) return;
+      if (error.verificationRequired) {
+        _openVerification(email, error.message, error.retryAfter);
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  void _openVerification(String email, String? message, int retryAfter) {
+    _password.clear();
+    _confirmation.clear();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => AurexEmailVerificationScreen(
+          email: email,
+          initialMessage: message,
+          retryAfter: retryAfter,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AurexLoginScreen.black,
+      appBar: AppBar(
+        backgroundColor: AurexLoginScreen.black,
+        foregroundColor: AurexLoginScreen.softGold,
+        title: const Text('Sign Up'),
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Create Account',
+                      style: TextStyle(
+                        color: AurexLoginScreen.softGold,
+                        fontSize: 30,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Sign up to start your fitness journey',
+                      style: TextStyle(
+                        color: AurexLoginScreen.mutedText,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                    _InputField(
+                      controller: _name,
+                      icon: Icons.person_outline_rounded,
+                      hint: 'Full Name',
+                      keyboardType: TextInputType.name,
+                      validator: (value) => (value?.trim().isEmpty ?? true)
+                          ? 'Enter your full name'
+                          : null,
+                    ),
+                    const SizedBox(height: 14),
+                    _InputField(
+                      controller: _email,
+                      icon: Icons.email_outlined,
+                      hint: 'Email Address',
+                      keyboardType: TextInputType.emailAddress,
+                      validator: (value) {
+                        final email = value?.trim() ?? '';
+                        if (email.isEmpty) return 'Enter your email address';
+                        if (!RegExp(
+                          r'^[^\s@]+@[^\s@]+\.[^\s@]+$',
+                        ).hasMatch(email)) {
+                          return 'Enter a valid email address';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    _InputField(
+                      controller: _password,
+                      icon: Icons.lock_outline_rounded,
+                      hint: 'Password',
+                      obscureText: _obscurePassword,
+                      suffixIcon: IconButton(
+                        tooltip: _obscurePassword
+                            ? 'Show password'
+                            : 'Hide password',
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                          color: Colors.white,
+                        ),
+                      ),
+                      validator: (value) => (value?.length ?? 0) < 8
+                          ? 'Use at least 8 characters'
+                          : null,
+                    ),
+                    const SizedBox(height: 14),
+                    _InputField(
+                      controller: _confirmation,
+                      icon: Icons.lock_outline_rounded,
+                      hint: 'Confirm Password',
+                      obscureText: _obscurePassword,
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Confirm your password';
+                        }
+                        return value != _password.text
+                            ? 'Passwords do not match'
+                            : null;
+                      },
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'We will email you a verification code. Verify your email before logging in.',
+                      style: TextStyle(color: AurexLoginScreen.mutedText),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      height: 60,
+                      child: ElevatedButton(
+                        onPressed: _isSubmitting ? null : _submit,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AurexLoginScreen.softGold,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: Text(
+                          _isSubmitting ? 'CREATING ACCOUNT...' : 'SIGN UP',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    TextButton(
+                      onPressed: _isSubmitting
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AurexLoginScreen.softGold,
+                      ),
+                      child: const Text('Already have an account? Login'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AurexForgotPasswordScreen extends StatefulWidget {
+  const AurexForgotPasswordScreen({super.key});
+
+  @override
+  State<AurexForgotPasswordScreen> createState() =>
+      _AurexForgotPasswordScreenState();
+}
+
+class _AurexForgotPasswordScreenState extends State<AurexForgotPasswordScreen> {
+  final _email = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    if (_formKey.currentState?.validate() != true) return;
+    setState(() => _busy = true);
+    try {
+      final result = await AurexAuthApi.forgotPassword(_email.text.trim());
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => AurexPasswordResetScreen(
+            email: _email.text.trim(),
+            initialMessage: result['message'] as String?,
+            retryAfter: result['retry_after'] as int? ?? 60,
+          ),
+        ),
+      );
+    } on AurexAuthException catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _AuthSimpleScaffold(
+    title: 'Forgot Password',
+    child: Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Icon(
+            Icons.lock_reset_outlined,
+            color: AurexLoginScreen.softGold,
+            size: 64,
+          ),
+          const SizedBox(height: 22),
+          const Text(
+            'Reset your password',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 30,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Enter your email and we will send you a reset code.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AurexLoginScreen.mutedText, fontSize: 16),
+          ),
+          const SizedBox(height: 28),
+          _InputField(
+            controller: _email,
+            icon: Icons.email_outlined,
+            hint: 'Email Address',
+            keyboardType: TextInputType.emailAddress,
+            validator: (value) {
+              final email = value?.trim() ?? '';
+              return RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)
+                  ? null
+                  : 'Enter a valid email address';
+            },
+          ),
+          const SizedBox(height: 22),
+          ElevatedButton(
+            onPressed: _busy ? null : _send,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AurexLoginScreen.softGold,
+              foregroundColor: Colors.black,
+              minimumSize: const Size.fromHeight(60),
+            ),
+            child: Text(_busy ? 'SENDING...' : 'SEND RESET CODE'),
+          ),
+          TextButton(
+            onPressed: _busy ? null : () => Navigator.of(context).pop(),
+            style: TextButton.styleFrom(
+              foregroundColor: AurexLoginScreen.softGold,
+            ),
+            child: const Text('Back to Login'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class AurexPasswordResetScreen extends StatefulWidget {
+  const AurexPasswordResetScreen({
+    super.key,
+    required this.email,
+    this.initialMessage,
+    this.retryAfter = 60,
+  });
+  final String email;
+  final String? initialMessage;
+  final int retryAfter;
+  @override
+  State<AurexPasswordResetScreen> createState() =>
+      _AurexPasswordResetScreenState();
+}
+
+class _AurexPasswordResetScreenState extends State<AurexPasswordResetScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _code = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmation = TextEditingController();
+  Timer? _timer;
+  int _cooldown = 0;
+  bool _busy = false;
+  bool _showPassword = false;
+  String? _message;
+  String? _resetToken;
+
+  @override
+  void initState() {
+    super.initState();
+    _message = widget.initialMessage;
+    _startCooldown(widget.retryAfter);
+  }
+
+  void _startCooldown(int seconds) {
+    _timer?.cancel();
+    setState(() => _cooldown = seconds);
+    if (seconds <= 0) return;
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return timer.cancel();
+      setState(() => _cooldown--);
+      if (_cooldown <= 0) timer.cancel();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _code.dispose();
+    _password.dispose();
+    _confirmation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _verifyCode() async {
+    if (_code.text.trim().length != 6) {
+      setState(() => _message = 'Enter the six-digit code.');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final result = await AurexAuthApi.verifyPasswordCode(
+        widget.email,
+        _code.text.trim(),
+      );
+      if (mounted)
+        setState(() {
+          _resetToken = result['reset_token'] as String;
+          _message = result['message'] as String?;
+        });
+    } on AurexAuthException catch (error) {
+      if (mounted) setState(() => _message = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resend() async {
+    setState(() => _busy = true);
+    try {
+      final result = await AurexAuthApi.forgotPassword(widget.email);
+      if (mounted) {
+        setState(() => _message = result['message'] as String?);
+        _startCooldown(result['retry_after'] as int? ?? 60);
+      }
+    } on AurexAuthException catch (error) {
+      if (mounted) setState(() => _message = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reset() async {
+    if (_formKey.currentState?.validate() != true || _resetToken == null)
+      return;
+    setState(() => _busy = true);
+    try {
+      await AurexAuthApi.resetPassword(
+        widget.email,
+        _resetToken!,
+        _password.text,
+        _confirmation.text,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Password changed. You can now log in.'),
+          ),
+        );
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+    } on AurexAuthException catch (error) {
+      if (mounted) setState(() => _message = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _AuthSimpleScaffold(
+    title: 'Reset Password',
+    child: Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Icon(
+            Icons.mark_email_read_outlined,
+            color: AurexLoginScreen.softGold,
+            size: 64,
+          ),
+          const SizedBox(height: 20),
+          Text(
+            _resetToken == null
+                ? 'Enter your reset code'
+                : 'Choose a new password',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            _resetToken == null
+                ? 'We sent a code to ${widget.email}'
+                : 'Your reset code is verified.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AurexLoginScreen.mutedText,
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 24),
+          if (_resetToken == null) ...[
+            TextField(
+              controller: _code,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 28,
+                letterSpacing: 8,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Reset code',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _busy ? null : _verifyCode,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AurexLoginScreen.softGold,
+                foregroundColor: Colors.black,
+                minimumSize: const Size.fromHeight(58),
+              ),
+              child: const Text('VERIFY CODE'),
+            ),
+            TextButton(
+              onPressed: _busy || _cooldown > 0 ? null : _resend,
+              child: Text(
+                _cooldown > 0 ? 'Resend code in ${_cooldown}s' : 'Resend code',
+              ),
+            ),
+          ] else ...[
+            _InputField(
+              controller: _password,
+              icon: Icons.lock_outline,
+              hint: 'New Password',
+              obscureText: !_showPassword,
+              validator: (value) =>
+                  (value?.length ?? 0) < 8 ? 'Use at least 8 characters' : null,
+            ),
+            const SizedBox(height: 14),
+            _InputField(
+              controller: _confirmation,
+              icon: Icons.lock_outline,
+              hint: 'Confirm Password',
+              obscureText: !_showPassword,
+              validator: (value) =>
+                  value != _password.text ? 'Passwords do not match' : null,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _busy ? null : _reset,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AurexLoginScreen.softGold,
+                foregroundColor: Colors.black,
+                minimumSize: const Size.fromHeight(58),
+              ),
+              child: const Text('CHANGE PASSWORD'),
+            ),
+          ],
+          if (_message != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 18),
+              child: Text(
+                _message!,
+                style: const TextStyle(color: AurexLoginScreen.mutedText),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _AuthSimpleScaffold extends StatelessWidget {
+  const _AuthSimpleScaffold({required this.title, required this.child});
+  final String title;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: AurexLoginScreen.black,
+    appBar: AppBar(
+      title: Text(title),
+      backgroundColor: AurexLoginScreen.black,
+      foregroundColor: AurexLoginScreen.softGold,
+    ),
+    body: SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: child,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class AurexEmailVerificationScreen extends StatefulWidget {
+  const AurexEmailVerificationScreen({
+    super.key,
+    required this.email,
+    this.initialMessage,
+    this.retryAfter = 60,
+  });
+
+  final String email;
+  final String? initialMessage;
+  final int retryAfter;
+
+  @override
+  State<AurexEmailVerificationScreen> createState() =>
+      _AurexEmailVerificationScreenState();
+}
+
+class _AurexEmailVerificationScreenState
+    extends State<AurexEmailVerificationScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _code = TextEditingController();
+  Timer? _timer;
+  int _seconds = 0;
+  bool _busy = false;
+  bool _verified = false;
+  String? _message;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _message = widget.initialMessage;
+    _startCooldown(widget.retryAfter);
+  }
+
+  void _startCooldown(int seconds) {
+    _timer?.cancel();
+    _seconds = seconds;
+    if (_seconds <= 0) return;
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() => _seconds--);
+      if (_seconds <= 0) timer.cancel();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _verify() async {
+    if (_formKey.currentState?.validate() != true) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+      _hasError = false;
+    });
+    try {
+      await AurexAuthApi.verifyEmail(widget.email, _code.text.trim());
+      if (!mounted) return;
+      _timer?.cancel();
+      setState(() {
+        _verified = true;
+        _code.clear();
+      });
+    } on AurexAuthException catch (error) {
+      if (mounted) {
+        setState(() {
+          _message = error.message;
+          _hasError = true;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resend() async {
+    setState(() {
+      _busy = true;
+      _message = null;
+      _hasError = false;
+    });
+    try {
+      final result = await AurexAuthApi.resendCode(widget.email);
+      if (!mounted) return;
+      setState(() {
+        _message = result['message'] as String?;
+        _code.clear();
+        _startCooldown(result['retry_after'] as int? ?? 60);
+      });
+    } on AurexAuthException catch (error) {
+      if (mounted) {
+        setState(() {
+          _message = error.message;
+          _hasError = true;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AurexLoginScreen.black,
+      appBar: AppBar(
+        title: const Text('Email Verification'),
+        backgroundColor: AurexLoginScreen.black,
+        foregroundColor: AurexLoginScreen.softGold,
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Icon(
+                      _verified
+                          ? Icons.verified_outlined
+                          : Icons.mark_email_unread_outlined,
+                      color: AurexLoginScreen.softGold,
+                      size: 64,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      _verified ? 'Email verified!' : 'Verify your email',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 30,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      _verified
+                          ? 'Your email is confirmed. You can now log in.'
+                          : 'Enter the six-digit code sent to ${widget.email}. The code expires in 10 minutes.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: AurexLoginScreen.mutedText,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    if (!_verified) ...[
+                      TextFormField(
+                        controller: _code,
+                        enabled: !_busy,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.done,
+                        autofillHints: const [AutofillHints.oneTimeCode],
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(6),
+                        ],
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 30,
+                          letterSpacing: 8,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Verification code',
+                          labelStyle: TextStyle(
+                            color: AurexLoginScreen.softGold,
+                            letterSpacing: 0,
+                          ),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) =>
+                            RegExp(r'^[0-9]{6}$').hasMatch(value ?? '')
+                            ? null
+                            : 'Enter the six-digit code',
+                        onFieldSubmitted: (_) {
+                          if (!_busy) _verify();
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      if (_message != null) ...[
+                        Text(
+                          _message!,
+                          style: TextStyle(
+                            color: _hasError
+                                ? const Color(0xFFFFB4AB)
+                                : AurexLoginScreen.mutedText,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                      ElevatedButton(
+                        onPressed: _busy ? null : _verify,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AurexLoginScreen.softGold,
+                          foregroundColor: Colors.black,
+                          minimumSize: const Size.fromHeight(60),
+                        ),
+                        child: Text(_busy ? 'PLEASE WAIT...' : 'VERIFY EMAIL'),
+                      ),
+                      const SizedBox(height: 14),
+                      TextButton(
+                        onPressed: _busy || _seconds > 0 ? null : _resend,
+                        style: TextButton.styleFrom(
+                          foregroundColor: AurexLoginScreen.softGold,
+                          disabledForegroundColor: AurexLoginScreen.mutedText,
+                        ),
+                        child: Text(
+                          _seconds > 0
+                              ? 'Resend code in ${_seconds}s'
+                              : 'Resend code',
+                        ),
+                      ),
+                      const Text(
+                        'Check your spam folder if you do not see the email.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: AurexLoginScreen.mutedText),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AurexLoginScreen.softGold,
+                      ),
+                      child: const Text('Back to Login'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class AurexSession {
   const AurexSession({required this.token, required this.user, this.member});
 
@@ -365,22 +1200,89 @@ class AurexSession {
 }
 
 class AurexAuthApi {
+  static Future<Map<String, dynamic>> forgotPassword(String email) =>
+      _post('/password/forgot', {'email': email});
+
+  static Future<Map<String, dynamic>> verifyPasswordCode(
+    String email,
+    String code,
+  ) => _post('/password/verify', {'email': email, 'code': code});
+
+  static Future<Map<String, dynamic>> resetPassword(
+    String email,
+    String token,
+    String password,
+    String confirmation,
+  ) => _post('/password/reset', {
+    'email': email,
+    'reset_token': token,
+    'password': password,
+    'password_confirmation': confirmation,
+  });
+
+  static Future<Map<String, dynamic>> register({
+    required String name,
+    required String email,
+    required String password,
+    required String confirmation,
+  }) => _post('/register', {
+    'name': name,
+    'email': email,
+    'password': password,
+    'password_confirmation': confirmation,
+  });
+
+  static Future<Map<String, dynamic>> verifyEmail(String email, String code) =>
+      _post('/email/verify', {'email': email, 'code': code});
+
+  static Future<Map<String, dynamic>> resendCode(String email) =>
+      _post('/email/resend', {'email': email});
+
+  static Future<Map<String, dynamic>> _post(
+    String path,
+    Map<String, String> body,
+  ) async {
+    try {
+      final response = await aurexPostJson(
+        Uri.parse('$aurexApiBaseUrl$path'),
+        headers: const {'Accept': 'application/json'},
+        body: jsonEncode(body),
+      ).timeout(const Duration(seconds: 30));
+      final payload = _payloadFrom(response);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw AurexAuthException(
+          _messageFrom(payload),
+          verificationRequired: payload['verification_required'] == true,
+          retryAfter: payload['retry_after'] is int
+              ? payload['retry_after'] as int
+              : 0,
+        );
+      }
+      return payload;
+    } on TimeoutException {
+      throw const AurexAuthException(
+        'The request timed out. Please try again. If your account was created, log in to continue verification.',
+      );
+    } on AurexNetworkException {
+      throw const AurexAuthException(
+        'Unable to reach the AUREX server. Check your connection.',
+      );
+    } on FormatException {
+      throw const AurexAuthException(
+        'The server returned an invalid response.',
+      );
+    }
+  }
+
   static Future<AurexSession> login({
     required String email,
     required String password,
   }) async {
     try {
-      final uri = Uri.parse('$aurexApiBaseUrl/login');
-      final response = await aurexPostJson(
-        uri,
-        headers: const {'Accept': 'application/json'},
-        body: jsonEncode({'email': email, 'password': password}),
-      );
-      final payload = _payloadFrom(response);
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw AurexAuthException(_messageFrom(payload));
-      }
+      final payload = await _post('/login', {
+        'email': email,
+        'password': password,
+      });
 
       final token = payload['token'];
       final user = payload['user'];
@@ -452,14 +1354,20 @@ class AurexAuthApi {
       }
     }
 
-    return payload['message']?.toString() ?? 'Unable to sign in.';
+    return payload['message']?.toString() ?? 'Unable to complete the request.';
   }
 }
 
 class AurexAuthException implements Exception {
-  const AurexAuthException(this.message);
+  const AurexAuthException(
+    this.message, {
+    this.verificationRequired = false,
+    this.retryAfter = 0,
+  });
 
   final String message;
+  final bool verificationRequired;
+  final int retryAfter;
 }
 
 class _InputField extends StatelessWidget {
@@ -522,78 +1430,6 @@ class _InputField extends StatelessWidget {
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(24),
           borderSide: const BorderSide(color: Color(0xFFFFB4AB)),
-        ),
-      ),
-    );
-  }
-}
-
-class _DividerLabel extends StatelessWidget {
-  const _DividerLabel();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(child: Divider(color: Colors.white.withValues(alpha: 0.38))),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            'OR CONTINUE WITH',
-            style: TextStyle(
-              color: AurexLoginScreen.mutedText,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        Expanded(child: Divider(color: Colors.white.withValues(alpha: 0.38))),
-      ],
-    );
-  }
-}
-
-class _SocialButton extends StatelessWidget {
-  const _SocialButton({
-    required this.label,
-    required this.mark,
-    required this.markColor,
-  });
-
-  final String label;
-  final String mark;
-  final Color markColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton(
-      onPressed: () {},
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        side: BorderSide(color: AurexLoginScreen.gold.withValues(alpha: 0.75)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        minimumSize: const Size.fromHeight(58),
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-      ),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              mark,
-              style: TextStyle(
-                color: markColor,
-                fontSize: mark == '●' ? 22 : 25,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-          ],
         ),
       ),
     );
