@@ -11,37 +11,8 @@ import 'router.dart';
 
 const _aurexPlaceholderAsset = 'assets/images/placeholder.png';
 
-/// Body parts and equipment the gym catalogue is organised by. The artwork
-/// already contains the label, so tiles do not draw a title on top.
-const aurexBodyParts = [
-  ('Chest', 'assets/images/body_chest.png'),
-  ('Back', 'assets/images/body_back.png'),
-  ('Shoulders', 'assets/images/body_shoulders.png'),
-  ('Arms', 'assets/images/body_arms.png'),
-  ('Legs', 'assets/images/body_legs.png'),
-  ('Abs', 'assets/images/body_abs.png'),
-];
-
-const aurexEquipment = [
-  ('Dumbbell', 'assets/images/equip_dumbbell.png'),
-  ('Barbell', 'assets/images/equip_barbell.png'),
-  ('Kettlebell', 'assets/images/equip_kettlebell.png'),
-  ('Resistance Band', 'assets/images/equip_band.png'),
-  ('Machine', 'assets/images/equip_machine.png'),
-];
-
-/// Artwork for an equipment name from the API, matched by keyword.
-String? equipmentArtwork(String name) {
-  final normalized = name.toLowerCase();
-  for (final (label, asset) in aurexEquipment) {
-    if (normalized.contains(label.toLowerCase().split(' ').last) ||
-        label.toLowerCase().contains(normalized)) {
-      return asset;
-    }
-  }
-  return null;
-}
-
+/// Home screen. Every section is loaded from the API; while loading it shows
+/// placeholders, and on failure an inline message with Retry.
 class AurexLandingScreen extends ConsumerWidget {
   const AurexLandingScreen({super.key});
 
@@ -52,6 +23,8 @@ class AurexLandingScreen extends ConsumerWidget {
 
     await Future.wait([
       settle(ref.refresh(homeBannersProvider.future)),
+      settle(ref.refresh(profileProvider.future)),
+      settle(ref.refresh(bodyPartsProvider.future)),
       settle(ref.refresh(equipmentProvider.future)),
       settle(ref.refresh(workoutsProvider.future)),
       settle(ref.refresh(workoutLevelsProvider.future)),
@@ -73,31 +46,45 @@ class AurexLandingScreen extends ConsumerWidget {
             padding: const EdgeInsets.only(bottom: 116),
             children: [
               const _HeroSection(),
-              const SizedBox(height: 8),
+              const _Greeting(),
+              const SizedBox(height: 24),
               _SectionHeader(
                 title: 'BODY PART EXERCISES',
                 onSeeAll: () => context.push(AurexRoutes.bodyParts),
               ),
-              _HorizontalImageTiles(
-                width: 142,
-                showTitle: false,
-                items: [
-                  for (final (name, asset) in aurexBodyParts)
-                    _ImageTileData(
-                      name,
-                      asset,
-                      onTap: () => context.push(
-                        AurexRoutes.exerciseGroup('Body Part', name),
-                      ),
-                    ),
-                ],
+              _CatalogueTiles<MobileBodyPart>(
+                provider: bodyPartsProvider,
+                width: 150,
+                emptyMessage: 'No body parts have been published yet.',
+                tile: (context, part) => _ImageTileData(
+                  part.name,
+                  imageUrl: part.imageUrl,
+                  subtitle:
+                      '${part.exerciseCount} exercise'
+                      '${part.exerciseCount == 1 ? '' : 's'}',
+                  onTap: () => context.push(
+                    AurexRoutes.exerciseGroup('Body Part', part.name),
+                  ),
+                ),
               ),
               const SizedBox(height: 28),
               _SectionHeader(
                 title: 'EQUIPMENT BASED EXERCISES',
                 onSeeAll: () => context.push(AurexRoutes.equipment),
               ),
-              const _EquipmentTiles(width: 154),
+              _CatalogueTiles<MobileEquipment>(
+                provider: equipmentProvider,
+                width: 160,
+                emptyMessage: 'No equipment has been published yet.',
+                tile: (context, item) => _ImageTileData(
+                  item.name,
+                  imageUrl: item.imageUrl,
+                  subtitle: item.category,
+                  onTap: () => context.push(
+                    AurexRoutes.exerciseGroup('Equipment', item.name),
+                  ),
+                ),
+              ),
               const SizedBox(height: 28),
               _SectionHeader(
                 title: 'WORKOUTS',
@@ -106,10 +93,84 @@ class AurexLandingScreen extends ConsumerWidget {
               const _WorkoutList(),
               const SizedBox(height: 28),
               const _SectionHeader(title: 'WORKOUT LEVELS', showSeeAll: false),
-              const _WorkoutLevelTiles(width: 200),
+              _CatalogueTiles<MobileWorkoutLevel>(
+                provider: workoutLevelsProvider,
+                width: 200,
+                emptyMessage: 'No workout levels have been published yet.',
+                tile: (context, level) => _ImageTileData(
+                  level.name,
+                  imageUrl: level.coverImageUrl,
+                  subtitle: level.intensity,
+                  onTap: () => context.go(
+                    Uri(
+                      path: AurexRoutes.workouts,
+                      queryParameters: {'level': level.name},
+                    ).toString(),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// "Welcome back" line with the member's name and membership from `/me`.
+class _Greeting extends ConsumerWidget {
+  const _Greeting();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(profileProvider).value;
+    if (profile == null) {
+      return const SizedBox.shrink();
+    }
+
+    final firstName = profile.fullName.split(' ').first;
+    final days = profile.daysBeforeExpiry;
+    final membership = [
+      if (profile.membershipPlanName.isNotEmpty) profile.membershipPlanName,
+      if (profile.membershipStatus.isNotEmpty) profile.membershipStatus,
+      if (days != null)
+        days < 0 ? 'expired' : '$days day${days == 1 ? '' : 's'} left',
+    ].join(' • ');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 20, 32, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text.rich(
+            TextSpan(
+              text: 'Welcome back, ',
+              children: [
+                TextSpan(
+                  text: firstName,
+                  style: const TextStyle(color: _LandingColors.softGold),
+                ),
+              ],
+            ),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          if (membership.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              membership,
+              style: TextStyle(
+                color: days != null && days < 7
+                    ? const Color(0xFFFF8A80)
+                    : Colors.white.withValues(alpha: 0.65),
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -120,12 +181,17 @@ class _HeroSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final slides = (ref.watch(homeBannersProvider).value ?? const [])
+    final banners = ref.watch(homeBannersProvider);
+    final slides = (banners.value ?? const [])
         .map(_HeroSlideData.fromBanner)
         .toList();
 
     if (slides.isEmpty) {
-      return const _HeroLoadingState();
+      // Still loading: keep the space. Nothing published (or banners failed to
+      // load): leave room for the status bar only; banners are optional.
+      return banners.isLoading
+          ? const _HeroLoadingState()
+          : SizedBox(height: MediaQuery.paddingOf(context).top + 24);
     }
 
     return _HeroCarousel(
@@ -379,93 +445,50 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _EquipmentTiles extends ConsumerWidget {
-  const _EquipmentTiles({required this.width});
+/// A horizontal row of catalogue tiles loaded from [provider].
+class _CatalogueTiles<T> extends ConsumerWidget {
+  const _CatalogueTiles({
+    required this.provider,
+    required this.tile,
+    required this.width,
+    required this.emptyMessage,
+  });
 
+  final FutureProvider<List<T>> provider;
+  final _ImageTileData Function(BuildContext context, T item) tile;
   final double width;
+  final String emptyMessage;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final equipment = ref.watch(equipmentProvider).value ?? const [];
+    final items = ref.watch(provider);
+    final values = items.value;
 
-    // Prefer the gym's own equipment list; fall back to the standard groups.
-    final names = equipment.isEmpty
-        ? [for (final (name, _) in aurexEquipment) name]
-        : equipment.map((item) => item.name).toSet().take(10).toList();
+    if (values == null) {
+      return items.hasError
+          ? _InlineMessage(
+              message: items.error.toString(),
+              onRetry: () => ref.invalidate(provider),
+            )
+          : _HorizontalImageTilePlaceholders(width: width);
+    }
 
-    return _HorizontalImageTiles(
-      width: width,
-      showTitle: false,
-      items: [
-        for (final name in names)
-          _ImageTileData(
-            name,
-            equipmentArtwork(name) ?? _aurexPlaceholderAsset,
-            onTap: () =>
-                context.push(AurexRoutes.exerciseGroup('Equipment', name)),
-          ),
-      ],
-    );
-  }
-}
-
-class _WorkoutLevelTiles extends ConsumerWidget {
-  const _WorkoutLevelTiles({required this.width});
-
-  final double width;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final levels = ref.watch(workoutLevelsProvider).value ?? const [];
-
-    if (levels.isEmpty) {
-      return _HorizontalImageTilePlaceholders(width: width);
+    if (values.isEmpty) {
+      return _InlineMessage(message: emptyMessage);
     }
 
     return _HorizontalImageTiles(
       width: width,
-      imageFit: BoxFit.contain,
-      showTitle: false,
-      items: [
-        for (final level in levels)
-          _ImageTileData(
-            level.name,
-            _levelArtwork(level.name),
-            imageUrl: level.coverImageUrl,
-            onTap: () => context.go(
-              Uri(
-                path: AurexRoutes.workouts,
-                queryParameters: {'level': level.name},
-              ).toString(),
-            ),
-          ),
-      ],
+      items: [for (final item in values) tile(context, item)],
     );
-  }
-
-  static String _levelArtwork(String name) {
-    final normalized = name.toLowerCase();
-    for (final level in ['beginner', 'intermediate', 'advanced', 'elite']) {
-      if (normalized.contains(level)) {
-        return 'assets/images/level_$level.png';
-      }
-    }
-    return _aurexPlaceholderAsset;
   }
 }
 
 class _HorizontalImageTiles extends StatelessWidget {
-  const _HorizontalImageTiles({
-    required this.items,
-    required this.width,
-    this.imageFit = BoxFit.cover,
-    this.showTitle = true,
-  });
+  const _HorizontalImageTiles({required this.items, required this.width});
 
   final List<_ImageTileData> items;
   final double width;
-  final BoxFit imageFit;
-  final bool showTitle;
 
   @override
   Widget build(BuildContext context) {
@@ -480,7 +503,11 @@ class _HorizontalImageTiles extends StatelessWidget {
           final item = items[index];
           return Semantics(
             button: item.onTap != null,
-            label: item.title,
+            label: [
+              item.title,
+              item.subtitle,
+            ].where((text) => text.isNotEmpty).join(', '),
+            excludeSemantics: true,
             child: GestureDetector(
               onTap: item.onTap,
               child: SizedBox(
@@ -497,43 +524,62 @@ class _HorizontalImageTiles extends StatelessWidget {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        _RemoteOrAssetImage(
-                          imageUrl: item.imageUrl,
-                          asset: item.image,
-                          fit: imageFit,
+                        if (item.imageUrl.isEmpty)
+                          const _NoImage()
+                        else
+                          _RemoteOrAssetImage(
+                            imageUrl: item.imageUrl,
+                            asset: _aurexPlaceholderAsset,
+                          ),
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  Colors.black.withValues(alpha: 0.78),
+                                ],
+                                stops: const [0.35, 1],
+                              ),
+                            ),
+                          ),
                         ),
-                        if (showTitle) ...[
-                          Positioned.fill(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.transparent,
-                                    Colors.black.withValues(alpha: 0.72),
-                                  ],
+                        Positioned(
+                          left: 12,
+                          right: 12,
+                          bottom: 12,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.05,
                                 ),
                               ),
-                            ),
+                              if (item.subtitle.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  item.subtitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: _LandingColors.softGold,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
-                          Positioned(
-                            left: 12,
-                            right: 12,
-                            bottom: 12,
-                            child: Text(
-                              item.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800,
-                                height: 1.05,
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ],
                     ),
                   ),
@@ -674,14 +720,12 @@ class _RemoteOrAssetImage extends StatefulWidget {
   const _RemoteOrAssetImage({
     required this.imageUrl,
     required this.asset,
-    this.fit = BoxFit.cover,
     this.alignment = Alignment.center,
     this.allowAssetFallback = true,
   });
 
   final String imageUrl;
   final String asset;
-  final BoxFit fit;
   final AlignmentGeometry alignment;
   final bool allowAssetFallback;
 
@@ -715,7 +759,7 @@ class _RemoteOrAssetImageState extends State<_RemoteOrAssetImage> {
 
       return Image.asset(
         widget.asset,
-        fit: widget.fit,
+        fit: BoxFit.cover,
         alignment: widget.alignment,
       );
     }
@@ -738,14 +782,14 @@ class _RemoteOrAssetImageState extends State<_RemoteOrAssetImage> {
 
           return Image.asset(
             widget.asset,
-            fit: widget.fit,
+            fit: BoxFit.cover,
             alignment: widget.alignment,
           );
         }
 
         return Image.memory(
           bytes,
-          fit: widget.fit,
+          fit: BoxFit.cover,
           alignment: widget.alignment,
           cacheWidth: (300 * dpr).round(),
           gaplessPlayback: true,
@@ -862,17 +906,43 @@ class _ShimmerSurfaceState extends State<_ShimmerSurface>
   }
 }
 
+/// Tile background for catalogue items that have no image uploaded yet.
+class _NoImage extends StatelessWidget {
+  const _NoImage();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1C1C1C), _LandingColors.black],
+        ),
+      ),
+      child: Align(
+        alignment: const Alignment(0, -0.35),
+        child: Icon(
+          Icons.fitness_center_rounded,
+          size: 42,
+          color: _LandingColors.softGold.withValues(alpha: 0.5),
+        ),
+      ),
+    );
+  }
+}
+
 class _ImageTileData {
   const _ImageTileData(
-    this.title,
-    this.image, {
+    this.title, {
     this.imageUrl = '',
+    this.subtitle = '',
     this.onTap,
   });
 
   final String title;
-  final String image;
   final String imageUrl;
+  final String subtitle;
   final VoidCallback? onTap;
 }
 

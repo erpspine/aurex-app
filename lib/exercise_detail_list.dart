@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'landing.dart' show aurexBodyParts, equipmentArtwork;
 import 'models.dart';
 import 'providers.dart';
 import 'router.dart';
@@ -120,17 +119,31 @@ class _ExerciseDetailListPageState
     return index == -1 ? _levelFilters.length : index;
   }
 
-  String _headerArtwork() {
-    if (_isEquipment) {
-      return equipmentArtwork(widget.title) ?? 'assets/images/placeholder.png';
-    }
+  /// The group's image from the API, or the first exercise image in it.
+  String _headerImage(List<MobileExercise> exercises) {
+    final title = _normalize(widget.title);
+    final groupImage = _isEquipment
+        ? ref
+              .watch(equipmentProvider)
+              .value
+              ?.where((item) => _normalize(item.name) == title)
+              .firstOrNull
+              ?.imageUrl
+        : ref
+              .watch(bodyPartsProvider)
+              .value
+              ?.where((part) => _normalize(part.name) == title)
+              .firstOrNull
+              ?.imageUrl;
 
-    for (final (name, asset) in aurexBodyParts) {
-      if (_normalize(name) == _normalize(widget.title)) {
-        return asset;
-      }
+    if (groupImage != null && groupImage.isNotEmpty) {
+      return groupImage;
     }
-    return 'assets/images/placeholder.png';
+    return exercises
+            .where((exercise) => exercise.imageUrl.isNotEmpty)
+            .firstOrNull
+            ?.imageUrl ??
+        '';
   }
 
   @override
@@ -161,7 +174,7 @@ class _ExerciseDetailListPageState
                 groupType: widget.groupType,
                 title: widget.title,
                 count: groupExercises.length,
-                image: _headerArtwork(),
+                imageUrl: _headerImage(groupExercises),
               ),
               const SizedBox(height: 24),
               _SearchField(title: widget.title, controller: _search),
@@ -246,18 +259,34 @@ class _TopBar extends StatelessWidget {
   }
 }
 
+class _HeaderPlaceholder extends StatelessWidget {
+  const _HeaderPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.white.withValues(alpha: 0.05),
+      child: const Icon(
+        Icons.fitness_center_rounded,
+        color: _DetailColors.gold,
+        size: 40,
+      ),
+    );
+  }
+}
+
 class _Header extends StatelessWidget {
   const _Header({
     required this.groupType,
     required this.title,
     required this.count,
-    required this.image,
+    required this.imageUrl,
   });
 
   final String groupType;
   final String title;
   final int count;
-  final String image;
+  final String imageUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -271,7 +300,14 @@ class _Header extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
           ),
-          child: Image.asset(image, fit: BoxFit.cover),
+          child: imageUrl.isEmpty
+              ? const _HeaderPlaceholder()
+              : Image.network(
+                  imageUrl,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) =>
+                      const _HeaderPlaceholder(),
+                ),
         ),
         const SizedBox(width: 24),
         Expanded(

@@ -13,9 +13,11 @@ import 'package:aurex/main.dart';
 import 'package:aurex/profile.dart';
 import 'package:aurex/providers.dart';
 
-/// Fake API: an empty catalogue plus a member profile.
-http.Client _fakeApi() {
-  return MockClient((request) async {
+/// Fake API: a small catalogue plus a member profile.
+http.Client _fakeApi() => MockClient(_fakeApiHandler);
+
+Future<http.Response> _fakeApiHandler(http.Request request) async {
+  {
     if (request.url.path == '/api/login') {
       return http.Response(
         jsonEncode({
@@ -46,8 +48,41 @@ http.Client _fakeApi() {
       '/api/logout' => {'message': 'Logged out successfully.'},
       '/api/workouts' => {'workouts': []},
       '/api/exercises' => {'exercises': []},
-      '/api/equipment' => {'equipment': []},
-      '/api/workout-levels' => {'workout_levels': []},
+      '/api/body-parts' => {
+        'body_parts': [
+          {
+            'id': 'bp1',
+            'name': 'Glutes',
+            'exercises_count': 7,
+            'status': 'Active',
+            'publish_status': 'Published',
+            'show_in_mobile_app': true,
+          },
+        ],
+      },
+      '/api/equipment' => {
+        'equipment': [
+          {
+            'id': 'eq1',
+            'name': 'Cable Crossover',
+            'category': 'Machines',
+            'publish_status': 'Published',
+            'show_in_mobile_app': true,
+          },
+        ],
+      },
+      '/api/workout-levels' => {
+        'workout_levels': [
+          {
+            'id': 'lv1',
+            'name': 'Pro Athlete',
+            'intensity': 'Very High',
+            'difficulty_rank': 4,
+            'publish_status': 'Published',
+            'show_in_mobile_app': true,
+          },
+        ],
+      },
       '/api/app-banners' => {'app_banners': []},
       '/api/diet-plans' => {'diet_plans': []},
       '/api/activity/workouts' => {'workout_logs': []},
@@ -62,7 +97,7 @@ http.Client _fakeApi() {
     return body == null
         ? http.Response('{"message":"Not found"}', 404)
         : http.Response(jsonEncode(body), 200);
-  });
+  }
 }
 
 Widget _app({Map<String, String> secureStorage = const {}}) {
@@ -159,6 +194,86 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
     expect(find.text('Login failed'), findsNothing);
+  });
+
+  testWidgets('home screen shows data from the API', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      _app(
+        secureStorage: {
+          'aurex.session': jsonEncode({
+            'token': 'saved-token',
+            'user': {'id': 1, 'name': 'Test Member', 'role': 'Member'},
+          }),
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Greeting from /me, tiles from /body-parts, /equipment, /workout-levels.
+    expect(
+      find.textContaining('Welcome back', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.text('Glutes'), findsOneWidget);
+    expect(find.text('7 exercises'), findsOneWidget);
+    expect(find.text('Cable Crossover'), findsOneWidget);
+    expect(find.text('Machines'), findsOneWidget);
+    expect(find.text('No workouts published yet.'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('Pro Athlete'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Very High'), findsOneWidget);
+
+    // Bundled sample tiles are gone: only what the API returned is shown.
+    expect(find.text('Chest'), findsNothing);
+    expect(find.text('Dumbbell'), findsNothing);
+  });
+
+  testWidgets('a home section that fails to load can be retried', (
+    tester,
+  ) async {
+    var failBodyParts = true;
+    final api = MockClient((request) async {
+      if (request.url.path == '/api/body-parts' && failBodyParts) {
+        return http.Response('{"message":"Server busy"}', 503);
+      }
+      return _fakeApiHandler(request);
+    });
+    FlutterSecureStorage.setMockInitialValues({
+      'aurex.session': jsonEncode({
+        'token': 't',
+        'user': {'id': 1, 'name': 'Test Member', 'role': 'Member'},
+      }),
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          cookieAuthProvider.overrideWithValue(false),
+          httpClientProvider.overrideWithValue(api),
+        ],
+        retry: (retryCount, error) => null,
+        child: const AurexApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server busy'), findsOneWidget);
+    expect(find.text('Glutes'), findsNothing);
+
+    failBodyParts = false;
+    await tester.tap(find.widgetWithText(TextButton, 'Retry').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server busy'), findsNothing);
+    expect(find.text('Glutes'), findsOneWidget);
   });
 
   testWidgets('edit profile sheet scrolls above the tab bar and saves', (

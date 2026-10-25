@@ -350,6 +350,8 @@ class MobileEquipment {
     required this.category,
     required this.primaryMuscleGroup,
     required this.supportedLevel,
+    required this.description,
+    required this.imageUrl,
     required this.publishStatus,
     required this.showInMobileApp,
   });
@@ -359,6 +361,8 @@ class MobileEquipment {
   final String category;
   final String primaryMuscleGroup;
   final String supportedLevel;
+  final String description;
+  final String imageUrl;
   final String publishStatus;
   final bool showInMobileApp;
 
@@ -371,8 +375,52 @@ class MobileEquipment {
       category: _string(json['category']),
       primaryMuscleGroup: _string(json['primary_muscle_group']),
       supportedLevel: _string(json['supported_level']),
+      description: _string(json['description']),
+      imageUrl: _versionedMediaUrl(json['image_url'], json['updated_at']),
       publishStatus: _string(json['publish_status']),
       showInMobileApp: _bool(json['show_in_mobile_app']),
+    );
+  }
+}
+
+class MobileBodyPart {
+  const MobileBodyPart({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.imageUrl,
+    required this.exerciseCount,
+    required this.status,
+    required this.publishStatus,
+    required this.showInMobileApp,
+  });
+
+  final String id;
+  final String name;
+  final String description;
+  final String imageUrl;
+
+  /// Published app exercises for this body part.
+  final int exerciseCount;
+  final String status;
+  final String publishStatus;
+  final bool showInMobileApp;
+
+  bool get isPublishedMobile =>
+      status == 'Active' && publishStatus == 'Published' && showInMobileApp;
+
+  factory MobileBodyPart.fromJson(Map<String, dynamic> json) {
+    return MobileBodyPart(
+      id: _string(json['id']),
+      name: _string(json['name'], fallback: 'Body Part'),
+      description: _string(json['description']),
+      imageUrl: _versionedMediaUrl(json['image_url'], json['updated_at']),
+      exerciseCount: _int(json['exercises_count']),
+      status: _string(json['status'], fallback: 'Active'),
+      publishStatus: _string(json['publish_status'], fallback: 'Published'),
+      showInMobileApp:
+          json['show_in_mobile_app'] == null ||
+          _bool(json['show_in_mobile_app']),
     );
   }
 }

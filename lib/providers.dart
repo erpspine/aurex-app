@@ -155,6 +155,11 @@ final equipmentProvider = FutureProvider<List<MobileEquipment>>((ref) async {
   return items.where((item) => item.isPublishedMobile).toList();
 });
 
+final bodyPartsProvider = FutureProvider<List<MobileBodyPart>>((ref) async {
+  final items = await ref.watch(apiClientProvider).fetchBodyParts();
+  return items.where((item) => item.isPublishedMobile).toList();
+});
+
 final workoutLevelsProvider = FutureProvider<List<MobileWorkoutLevel>>((
   ref,
 ) async {

@@ -212,6 +212,11 @@ class AurexApiClient {
     return items.map(MobileEquipment.fromJson).toList();
   }
 
+  Future<List<MobileBodyPart>> fetchBodyParts() async {
+    final items = await _getList('/body-parts', 'body_parts');
+    return items.map(MobileBodyPart.fromJson).toList();
+  }
+
   Future<List<MobileWorkoutLevel>> fetchWorkoutLevels() async {
     final items = await _getList('/workout-levels', 'workout_levels');
     return items.map(MobileWorkoutLevel.fromJson).toList();
