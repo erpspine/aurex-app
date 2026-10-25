@@ -7,6 +7,7 @@ import 'api_client.dart';
 import 'models.dart';
 import 'providers.dart';
 import 'router.dart';
+import 'toast.dart';
 
 class WorkoutSessionPage extends ConsumerWidget {
   const WorkoutSessionPage({super.key, required this.exerciseId});
@@ -107,7 +108,7 @@ class _SessionView extends ConsumerWidget {
 
   Future<void> _end(BuildContext context, WidgetRef ref) async {
     final session = ref.read(workoutSessionProvider(_plan));
-    final messenger = ScaffoldMessenger.of(context);
+    final toaster = AurexToaster.of(context);
 
     if (session.completedCount == 0) {
       popOrGo(context, AurexRoutes.exercise(exercise.id));
@@ -148,14 +149,10 @@ class _SessionView extends ConsumerWidget {
         await _save(ref, session);
       } on AurexApiException catch (error) {
         // Stay on the page so the member can try saving again.
-        messenger.showSnackBar(
-          SnackBar(content: Text('Workout not saved: ${error.message}')),
-        );
+        toaster.error('Workout not saved', error.message);
         return;
       }
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Workout saved to your progress.')),
-      );
+      toaster.success('Workout saved', 'It now counts toward your progress.');
     }
 
     if (context.mounted) {

@@ -10,6 +10,8 @@ import 'api_client.dart';
 import 'models.dart';
 import 'providers.dart';
 import 'router.dart';
+import 'toast.dart';
+import 'sheet.dart';
 
 /// Daily calorie and macro targets for the diary.
 class _Targets {
@@ -127,11 +129,11 @@ Future<void> _guard(
   BuildContext context,
   Future<void> Function() action,
 ) async {
-  final messenger = ScaffoldMessenger.of(context);
+  final toaster = AurexToaster.of(context);
   try {
     await action();
   } on AurexApiException catch (error) {
-    messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    toaster.error('Not saved', error.message);
   }
 }
 
@@ -888,15 +890,7 @@ class _MealPlanCard extends ConsumerWidget {
             ? (planAsync.hasError
                   ? () => ref.invalidate(dietPlansProvider)
                   : null)
-            : () => showModalBottomSheet<void>(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: const Color(0xFF141414),
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                ),
-                builder: (context) => _MealPlanSheet(plan: plan),
-              ),
+            : () => showAurexSheet<void>(context, _MealPlanSheet(plan: plan)),
         child: Row(
           children: [
             CircleAvatar(
@@ -1097,15 +1091,13 @@ class _MealPlanSheet extends ConsumerWidget {
                     ? const Icon(Icons.check, color: _DietColors.softGold)
                     : null,
                 onTap: () {
-                  final messenger = ScaffoldMessenger.of(context);
+                  final toaster = AurexToaster.of(context);
                   Navigator.pop(context);
                   ref
                       .read(dietPreferencesProvider.notifier)
                       .selectPlan(option.id)
                       .catchError((Object error) {
-                        messenger.showSnackBar(
-                          SnackBar(content: Text(error.toString())),
-                        );
+                        toaster.error('Plan not changed', error.toString());
                       });
                 },
               ),

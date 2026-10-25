@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'models.dart';
 import 'providers.dart';
 import 'router.dart';
+import 'sheet.dart';
 
 class WorkoutsPage extends ConsumerStatefulWidget {
   const WorkoutsPage({super.key, this.initialLevel});
@@ -90,13 +91,9 @@ class _WorkoutsPageState extends ConsumerState<WorkoutsPage> {
         .map((level) => level.name)
         .toList();
 
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: const Color(0xFF141414),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => _LevelSheet(
+    final selected = await showAurexSheet<String>(
+      context,
+      _LevelSheet(
         levels: levels.isEmpty ? _defaultLevels : levels,
         selected: _level,
       ),

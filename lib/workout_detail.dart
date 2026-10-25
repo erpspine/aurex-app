@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'models.dart';
 import 'providers.dart';
 import 'router.dart';
+import 'toast.dart';
 
 /// Details of a single exercise and the entry point to a workout session.
 class WorkoutDetailPage extends ConsumerWidget {
@@ -384,8 +385,10 @@ class _HowToPerform extends StatelessWidget {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
 
     if (!opened && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to open the exercise video.')),
+      showAurexToast(
+        context,
+        title: 'Video unavailable',
+        message: 'Unable to open the exercise video.',
       );
     }
   }

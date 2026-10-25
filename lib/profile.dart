@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart';
 import 'api_client.dart';
 import 'models.dart';
 import 'providers.dart';
+import 'sheet.dart';
+import 'toast.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
   const ProfilePage({super.key});
@@ -16,32 +18,14 @@ class ProfilePage extends ConsumerStatefulWidget {
 class _ProfilePageState extends ConsumerState<ProfilePage> {
   bool _uploadingPhoto = false;
 
-  Future<void> _editProfile(MobileProfile profile) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _ProfileColors.panel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => _EditProfileSheet(profile: profile),
-    );
-  }
+  Future<void> _editProfile(MobileProfile profile) =>
+      showAurexSheet(context, _EditProfileSheet(profile: profile));
 
-  Future<void> _changePassword() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _ProfileColors.panel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => const _ChangePasswordSheet(),
-    );
-  }
+  Future<void> _changePassword() =>
+      showAurexSheet(context, const _ChangePasswordSheet());
 
   Future<void> _changePhoto() async {
-    final messenger = ScaffoldMessenger.of(context);
+    final toaster = AurexToaster.of(context);
 
     try {
       final image = await ImagePicker().pickImage(
@@ -59,11 +43,12 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       final bytes = await image.readAsBytes();
       await ref.read(profileProvider.notifier).uploadPhoto(bytes, image.name);
 
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Profile photo updated successfully.')),
-      );
+      toaster.success('Photo updated', 'Your profile photo has been changed.');
     } on AurexApiException catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      toaster.error('Photo not updated', error.message);
+    } on Exception {
+      // e.g. the photo picker was denied access or could not read the file.
+      toaster.error('Photo not updated', 'Could not open that photo.');
     } finally {
       if (mounted) setState(() => _uploadingPhoto = false);
     }
@@ -91,6 +76,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                   profile: profile,
                   uploadingPhoto: _uploadingPhoto,
                   onPhotoEdit: _changePhoto,
+                  onEdit: () => _editProfile(profile),
                 ),
                 const SizedBox(height: 28),
                 _ProfileStats(profile: profile),
@@ -143,11 +129,13 @@ class _ProfileHero extends StatelessWidget {
     required this.profile,
     required this.uploadingPhoto,
     required this.onPhotoEdit,
+    required this.onEdit,
   });
 
   final MobileProfile profile;
   final bool uploadingPhoto;
   final VoidCallback onPhotoEdit;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -221,7 +209,29 @@ class _ProfileHero extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              _LevelBadge(label: profile.workoutLevel),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _LevelBadge(label: profile.workoutLevel),
+                  OutlinedButton.icon(
+                    onPressed: onEdit,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _ProfileColors.softGold,
+                      side: const BorderSide(color: _ProfileColors.gold),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    icon: const Icon(Icons.edit, size: 18),
+                    label: const Text(
+                      'Edit Profile',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -673,6 +683,7 @@ class _EditProfileSheet extends ConsumerStatefulWidget {
 
 class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   final _formKey = GlobalKey<FormState>();
+  final _scroll = ScrollController();
   late final TextEditingController _name;
   late final TextEditingController _email;
   late final TextEditingController _phone;
@@ -732,16 +743,28 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     _emergencyName.dispose();
     _emergencyRelationship.dispose();
     _emergencyPhone.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
     if (_formKey.currentState?.validate() != true) {
+      // The required fields are at the top; bring them back into view so the
+      // highlighted errors are visible from the Save button.
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOut,
+      );
+      AurexToaster.of(context).error(
+        'Check your details',
+        'Some fields need attention. They are highlighted in red.',
+      );
       return;
     }
 
     setState(() => _saving = true);
-    final messenger = ScaffoldMessenger.of(context);
+    final toaster = AurexToaster.of(context);
 
     try {
       await ref.read(profileProvider.notifier).save({
@@ -764,11 +787,10 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
 
       if (!mounted) return;
       Navigator.of(context).pop();
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Profile updated successfully.')),
-      );
+      toaster.success('Profile updated', 'Your details have been saved.');
     } on AurexApiException catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      // The sheet stays open so nothing typed is lost.
+      toaster.error('Profile not saved', error.message);
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -820,6 +842,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
       child: Form(
         key: _formKey,
         child: SingleChildScrollView(
+          controller: _scroll,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1124,7 +1147,7 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
     }
 
     setState(() => _saving = true);
-    final messenger = ScaffoldMessenger.of(context);
+    final toaster = AurexToaster.of(context);
 
     try {
       await ref
@@ -1136,11 +1159,9 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
           );
       if (!mounted) return;
       Navigator.of(context).pop();
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Password changed successfully.')),
-      );
+      toaster.success('Password changed', 'Use your new password next time.');
     } on AurexApiException catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      toaster.error('Password not changed', error.message);
     } finally {
       if (mounted) setState(() => _saving = false);
     }

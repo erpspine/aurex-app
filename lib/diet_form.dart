@@ -8,6 +8,7 @@ import 'diet.dart' show dayLabel;
 import 'models.dart';
 import 'providers.dart';
 import 'router.dart';
+import 'toast.dart';
 
 class AddDietFormPage extends ConsumerStatefulWidget {
   const AddDietFormPage({super.key});
@@ -127,7 +128,7 @@ class _AddDietFormPageState extends ConsumerState<AddDietFormPage> {
     }
 
     setState(() => _saving = true);
-    final messenger = ScaffoldMessenger.of(context);
+    final toaster = AurexToaster.of(context);
 
     try {
       await ref
@@ -150,15 +151,13 @@ class _AddDietFormPageState extends ConsumerState<AddDietFormPage> {
             ),
           );
     } on AurexApiException catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      toaster.error('Food not added', error.message);
       if (mounted) setState(() => _saving = false);
       return;
     }
 
     ref.read(selectedDietDayProvider.notifier).select(_date);
-    messenger.showSnackBar(
-      SnackBar(content: Text('${_name.text.trim()} added to $_mealType.')),
-    );
+    toaster.success('Food added', '${_name.text.trim()} added to $_mealType.');
 
     if (mounted) {
       popOrGo(context, AurexRoutes.diet);

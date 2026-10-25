@@ -29,7 +29,7 @@ http.Client _fakeApi() {
     }
 
     final body = switch (request.url.path) {
-      '/api/me' => {
+      '/api/me' || '/api/profile' => {
         'user': {
           'id': 1,
           'name': 'Test Member',
@@ -159,6 +159,66 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
     expect(find.text('Login failed'), findsNothing);
+  });
+
+  testWidgets('edit profile sheet scrolls above the tab bar and saves', (
+    tester,
+  ) async {
+    // Phone-sized screen (about 393 x 873 logical pixels).
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      _app(
+        secureStorage: {
+          'aurex.session': jsonEncode({
+            'token': 'saved-token',
+            'user': {'id': 1, 'name': 'Test Member', 'role': 'Member'},
+          }),
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Edit Profile'));
+    await tester.pumpAndSettle();
+    expect(find.text('SAVE PROFILE'), findsOneWidget);
+
+    final save = find.text('SAVE PROFILE');
+    final sheetScroll = find
+        .ancestor(of: save, matching: find.byType(Scrollable))
+        .first;
+    await tester.scrollUntilVisible(save, 300, scrollable: sheetScroll);
+    await tester.pumpAndSettle();
+
+    // The sheet sits above the tab bar, so the last fields and the button
+    // are not covered and can be tapped.
+    final screenHeight =
+        tester.view.physicalSize.height / tester.view.devicePixelRatio;
+    expect(tester.getBottomLeft(save).dy, lessThan(screenHeight));
+    expect(find.text('Emergency Contact Phone'), findsOneWidget);
+    await tester.tap(save); // warns (and the test fails) if covered
+    await tester.pumpAndSettle();
+
+    // The account has no phone yet: saving explains why and scrolls up.
+    expect(find.text('Check your details'), findsOneWidget);
+    expect(find.text('Phone is required'), findsOneWidget);
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Phone'),
+      '0712 345 678',
+    );
+    await tester.scrollUntilVisible(save, 300, scrollable: sheetScroll);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(find.text('SAVE PROFILE'), findsNothing);
+    expect(find.text('Profile updated'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('opens signup without social providers and validates fields', (

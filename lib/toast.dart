@@ -17,8 +17,45 @@ void showAurexToast(
   AurexToastType type = AurexToastType.error,
   IconData? icon,
 }) {
-  final overlay = Overlay.of(context, rootOverlay: true);
-  _currentToast?.remove();
+  AurexToaster.of(
+    context,
+  ).show(title: title, message: message, type: type, icon: icon);
+}
+
+/// Shows toasts after an `await`: grab it with [AurexToaster.of] before the
+/// async gap (like `ScaffoldMessenger.of`), then call [success] or [error].
+class AurexToaster {
+  AurexToaster.of(BuildContext context)
+    : _overlay = Overlay.of(context, rootOverlay: true);
+
+  final OverlayState _overlay;
+
+  void success(String title, String message) =>
+      show(title: title, message: message, type: AurexToastType.success);
+
+  void error(String title, String message, {IconData? icon}) =>
+      show(title: title, message: message, icon: icon);
+
+  void show({
+    required String title,
+    required String message,
+    AurexToastType type = AurexToastType.error,
+    IconData? icon,
+  }) {
+    if (_overlay.mounted) {
+      _insertToast(_overlay, title, message, type, icon);
+    }
+  }
+}
+
+void _insertToast(
+  OverlayState overlay,
+  String title,
+  String message,
+  AurexToastType type,
+  IconData? icon,
+) {
+  if (_currentToast?.mounted ?? false) _currentToast!.remove();
 
   late final OverlayEntry entry;
   entry = OverlayEntry(
