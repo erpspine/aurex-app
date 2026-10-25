@@ -373,6 +373,7 @@ class _AurexSignUpScreenState extends ConsumerState<AurexSignUpScreen> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _email = TextEditingController();
+  final _phone = TextEditingController();
   final _password = TextEditingController();
   final _confirmation = TextEditingController();
   bool _obscurePassword = true;
@@ -382,6 +383,7 @@ class _AurexSignUpScreenState extends ConsumerState<AurexSignUpScreen> {
   void dispose() {
     _name.dispose();
     _email.dispose();
+    _phone.dispose();
     _password.dispose();
     _confirmation.dispose();
     super.dispose();
@@ -397,6 +399,7 @@ class _AurexSignUpScreenState extends ConsumerState<AurexSignUpScreen> {
           .register(
             name: _name.text.trim(),
             email: email,
+            phone: _phone.text.trim(),
             password: _password.text,
             confirmation: _confirmation.text,
           );
@@ -486,6 +489,23 @@ class _AurexSignUpScreenState extends ConsumerState<AurexSignUpScreen> {
                           r'^[^\s@]+@[^\s@]+\.[^\s@]+$',
                         ).hasMatch(email)) {
                           return 'Enter a valid email address';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    _InputField(
+                      controller: _phone,
+                      icon: Icons.phone_outlined,
+                      hint: 'Phone (WhatsApp)',
+                      keyboardType: TextInputType.phone,
+                      validator: (value) {
+                        final phone = value?.trim() ?? '';
+                        if (phone.isEmpty) return 'Enter your phone number';
+                        if (!RegExp(
+                          r'^\+?[0-9\s\-()]{9,20}$',
+                        ).hasMatch(phone)) {
+                          return 'Enter a valid phone number, e.g. 0712 345 678';
                         }
                         return null;
                       },
@@ -644,7 +664,8 @@ class _AurexForgotPasswordScreenState
           ),
           const SizedBox(height: 12),
           const Text(
-            'Enter your email and we will send you a reset code.',
+            'Enter your email and we will send you a reset code by email '
+            'and WhatsApp.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AurexLoginScreen.mutedText, fontSize: 16),
           ),
@@ -839,7 +860,7 @@ class _AurexPasswordResetScreenState
           const SizedBox(height: 10),
           Text(
             _resetToken == null
-                ? 'We sent a code to ${widget.email}'
+                ? 'Check ${widget.email} and your WhatsApp for the code.'
                 : 'Your reset code is verified.',
             textAlign: TextAlign.center,
             style: const TextStyle(

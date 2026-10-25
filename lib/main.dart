@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +11,10 @@ import 'router.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Clean web URLs (/verify-email?email=...) instead of /#/..., so links in
+  // emails open the right page. The web server must serve index.html for
+  // unknown paths. No effect on mobile.
+  usePathUrlStrategy();
   // Keep the browser URL in sync with pushed pages so a refresh reopens them.
   GoRouter.optionURLReflectsImperativeAPIs = true;
   unawaited(removeLegacyLocalData());

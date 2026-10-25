@@ -93,6 +93,7 @@ class AurexApiClient {
   Future<Map<String, dynamic>> register({
     required String name,
     required String email,
+    required String phone,
     required String password,
     required String confirmation,
   }) => _send(
@@ -101,6 +102,7 @@ class AurexApiClient {
     body: {
       'name': name,
       'email': email,
+      'phone': phone,
       'password': password,
       'password_confirmation': confirmation,
     },

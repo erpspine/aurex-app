@@ -189,17 +189,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Enter your full name'), findsOneWidget);
     expect(find.text('Enter your email address'), findsOneWidget);
+    expect(find.text('Enter your phone number'), findsOneWidget);
     expect(find.text('Use at least 8 characters'), findsOneWidget);
     expect(find.text('Confirm your password'), findsOneWidget);
     final fields = find.byType(TextFormField);
     await tester.enterText(fields.at(0), 'Test Member');
     await tester.enterText(fields.at(1), 'invalid');
-    await tester.enterText(fields.at(2), 'password123');
-    await tester.enterText(fields.at(3), 'different123');
+    await tester.enterText(fields.at(2), '12ab');
+    await tester.enterText(fields.at(3), 'password123');
+    await tester.enterText(fields.at(4), 'different123');
     await tester.ensureVisible(submit);
     await tester.tap(submit);
     await tester.pumpAndSettle();
     expect(find.text('Enter a valid email address'), findsOneWidget);
+    expect(
+      find.text('Enter a valid phone number, e.g. 0712 345 678'),
+      findsOneWidget,
+    );
     expect(find.text('Passwords do not match'), findsOneWidget);
     final login = find.text('Already have an account? Login');
     await tester.ensureVisible(login);
