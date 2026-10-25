@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'api_client.dart';
 import 'providers.dart';
 import 'router.dart';
+import 'toast.dart';
 
 /// Shown while the saved session is checked when the app starts.
 class AurexSplashScreen extends ConsumerWidget {
@@ -110,9 +111,7 @@ class _AurexLoginScreenState extends ConsumerState<AurexLoginScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      showAuthErrorToast(context, error);
     } finally {
       if (mounted) {
         setState(() {
@@ -412,9 +411,7 @@ class _AurexSignUpScreenState extends ConsumerState<AurexSignUpScreen> {
       if (error.verificationRequired) {
         _openVerification(email, error.message, error.retryAfter);
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.message)));
+        showAuthErrorToast(context, error, title: 'Sign up failed');
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -615,9 +612,7 @@ class _AurexForgotPasswordScreenState
       );
     } on AurexApiException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.message)));
+        showAuthErrorToast(context, error, title: 'Could not send code');
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -801,10 +796,11 @@ class _AurexPasswordResetScreenState
             _confirmation.text,
           );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Password changed. You can now log in.'),
-          ),
+        showAurexToast(
+          context,
+          title: 'Password changed',
+          message: 'You can now log in with your new password.',
+          type: AurexToastType.success,
         );
         context.go(AurexRoutes.login);
       }

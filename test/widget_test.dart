@@ -16,6 +16,18 @@ import 'package:aurex/providers.dart';
 /// Fake API: an empty catalogue plus a member profile.
 http.Client _fakeApi() {
   return MockClient((request) async {
+    if (request.url.path == '/api/login') {
+      return http.Response(
+        jsonEncode({
+          'message': 'The provided credentials are incorrect.',
+          'errors': {
+            'email': ['The provided credentials are incorrect.'],
+          },
+        }),
+        422,
+      );
+    }
+
     final body = switch (request.url.path) {
       '/api/me' => {
         'user': {
@@ -112,6 +124,41 @@ void main() {
       isNotNull,
     );
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a failed login shows an error toast that closes itself', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.at(0), 'member@example.test');
+    await tester.enterText(fields.at(1), 'wrong-password');
+    await tester.ensureVisible(find.text('LOGIN'));
+    await tester.tap(find.text('LOGIN'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Login failed'), findsOneWidget);
+    expect(
+      find.text('The provided credentials are incorrect.'),
+      findsOneWidget,
+    );
+    // The toast's icon, not the password field's.
+    expect(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('Login failed'),
+          matching: find.byType(Row),
+        ),
+        matching: find.byIcon(Icons.lock_outline_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(find.text('Login failed'), findsNothing);
   });
 
   testWidgets('opens signup without social providers and validates fields', (
