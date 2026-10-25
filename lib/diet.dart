@@ -1,110 +1,181 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'bottom_nav.dart';
-import 'diet_form.dart';
+import 'activity.dart';
+import 'api_client.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class DietPage extends StatelessWidget {
+/// Daily calorie and macro targets for the diary.
+class _Targets {
+  const _Targets({
+    required this.calories,
+    required this.protein,
+    required this.carbs,
+    required this.fat,
+  });
+
+  final int calories;
+  final int protein;
+  final int carbs;
+  final int fat;
+
+  /// The member's own goal wins, then the diet plan, then a 2,000 kcal
+  /// default split 30% protein / 40% carbs / 30% fat.
+  factory _Targets.resolve(DietPreferences preferences, MobileDietPlan? plan) {
+    final calories =
+        preferences.calorieGoal ?? plan?.calorieTarget ?? _defaultCalories;
+    final usePlanMacros =
+        preferences.calorieGoal == null && plan?.calorieTarget != null;
+
+    return _Targets(
+      calories: calories,
+      protein:
+          (usePlanMacros ? plan?.proteinTarget : null) ??
+          (calories * 0.30 / 4).round(),
+      carbs:
+          (usePlanMacros ? plan?.carbsTarget : null) ??
+          (calories * 0.40 / 4).round(),
+      fat:
+          (usePlanMacros ? plan?.fatTarget : null) ??
+          (calories * 0.30 / 9).round(),
+    );
+  }
+
+  static const _defaultCalories = 2000;
+}
+
+class DietPage extends ConsumerWidget {
   const DietPage({super.key});
 
-  static const _macros = [
-    _MacroData('PROTEIN', '142 g', '/ 160 g', 0.89, _DietColors.protein),
-    _MacroData('CARBS', '186 g', '/ 250 g', 0.74, _DietColors.gold),
-    _MacroData('FATS', '62 g', '/ 80 g', 0.78, _DietColors.fat),
-  ];
-
-  static const _meals = [
-    _MealData(
-      icon: Icons.wb_sunny_outlined,
-      meal: 'Breakfast',
-      time: '7:30 AM',
-      title: 'Oats with Whey Protein, Banana, Almonds',
-      calories: '520 kcal',
-      protein: 'P 32g',
-      carbs: 'C 58g',
-      fats: 'F 12g',
-      color: _DietColors.gold,
-    ),
-    _MealData(
-      icon: Icons.wb_sunny,
-      meal: 'Lunch',
-      time: '12:30 PM',
-      title: 'Grilled Chicken, Brown Rice, Steamed Vegetables',
-      calories: '620 kcal',
-      protein: 'P 45g',
-      carbs: 'C 62g',
-      fats: 'F 15g',
-      color: Color(0xFF73C94E),
-    ),
-    _MealData(
-      icon: Icons.local_drink_outlined,
-      meal: 'Snack',
-      time: '4:00 PM',
-      title: 'Greek Yogurt, Berries, Honey',
-      calories: '230 kcal',
-      protein: 'P 20g',
-      carbs: 'C 28g',
-      fats: 'F 4g',
-      color: Color(0xFFEDEDED),
-    ),
-    _MealData(
-      icon: Icons.nightlight_round,
-      meal: 'Dinner',
-      time: '7:00 PM',
-      title: 'Grilled Salmon, Sweet Potato, Asparagus',
-      calories: '472 kcal',
-      protein: 'P 45g',
-      carbs: 'C 38g',
-      fats: 'F 16g',
-      color: Color(0xFFFF8D3A),
-    ),
-  ];
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final day = ref.watch(selectedDietDayProvider);
+    final foodAsync = ref.watch(foodLogProvider);
+    final entries = (foodAsync.value ?? const <FoodEntry>[])
+        .where((entry) => entry.date == dateKey(day))
+        .toList();
+    final planAsync = ref.watch(activeDietPlanProvider);
+    final targets = _Targets.resolve(
+      ref.watch(dietPreferencesProvider).value ?? const DietPreferences(),
+      planAsync.value,
+    );
+
+    Future<void> refresh() async {
+      // Each section shows its own state, so failures are ignored here.
+      Future<void> settle(Future<Object?> future) =>
+          future.then((_) {}, onError: (_) {});
+
+      await Future.wait([
+        settle(ref.refresh(dietPlansProvider.future)),
+        settle(ref.refresh(foodLogProvider.future)),
+        settle(ref.refresh(waterLogProvider.future)),
+        settle(ref.refresh(dietPreferencesProvider.future)),
+      ]);
+    }
+
     return Scaffold(
       backgroundColor: _DietColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
-          children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(30, 52, 30, 126),
-              children: const [
-                _TopBar(),
-                SizedBox(height: 24),
-                _Header(),
-                SizedBox(height: 24),
-                _DateSelector(),
-                SizedBox(height: 24),
-                _CalorieSummary(macros: _macros),
-                SizedBox(height: 16),
-                _MealsPanel(meals: _meals),
-                SizedBox(height: 16),
-                _WaterPanel(),
-                SizedBox(height: 16),
-                _BottomCards(),
+        child: RefreshIndicator(
+          color: _DietColors.gold,
+          onRefresh: refresh,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 52, 24, 126),
+            children: [
+              const _TopBar(),
+              const SizedBox(height: 24),
+              const _Header(),
+              const SizedBox(height: 24),
+              const _DateSelector(),
+              if (foodAsync.hasError && !foodAsync.hasValue) ...[
+                const SizedBox(height: 16),
+                _LoadError(
+                  message:
+                      'Could not load your food diary. '
+                      '${foodAsync.error}',
+                  onRetry: () => ref.invalidate(foodLogProvider),
+                ),
+              ] else if (foodAsync.isLoading && !foodAsync.hasValue) ...[
+                const SizedBox(height: 16),
+                const LinearProgressIndicator(color: _DietColors.gold),
               ],
-            ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 3),
-            ),
-          ],
+              const SizedBox(height: 24),
+              _CalorieSummary(entries: entries, targets: targets),
+              const SizedBox(height: 16),
+              _MealsPanel(entries: entries),
+              const SizedBox(height: 16),
+              _WaterPanel(day: day),
+              const SizedBox(height: 16),
+              _MealPlanCard(planAsync: planAsync),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _TopBar extends StatelessWidget {
-  const _TopBar();
+/// Runs a save and reports API failures in a snackbar.
+Future<void> _guard(
+  BuildContext context,
+  Future<void> Function() action,
+) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await action();
+  } on AurexApiException catch (error) {
+    messenger.showSnackBar(SnackBar(content: Text(error.message)));
+  }
+}
+
+class _LoadError extends StatelessWidget {
+  const _LoadError({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
+    return _Panel(
+      padding: const EdgeInsets.fromLTRB(18, 10, 8, 10),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off, color: _DietColors.gold),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: _DietColors.muted),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetry,
+            child: const Text(
+              'Retry',
+              style: TextStyle(color: _DietColors.softGold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TopBar extends ConsumerWidget {
+  const _TopBar();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     return Row(
       children: [
+        const SizedBox(width: 58),
         const Spacer(),
         Image.asset(
           'assets/images/placeholder.png',
@@ -112,7 +183,22 @@ class _TopBar extends StatelessWidget {
           fit: BoxFit.contain,
         ),
         const Spacer(),
-        _IconBox(icon: Icons.calendar_month_outlined),
+        _IconBox(
+          icon: Icons.calendar_month_outlined,
+          tooltip: 'Pick a day',
+          onTap: () async {
+            final notifier = ref.read(selectedDietDayProvider.notifier);
+            final picked = await showDatePicker(
+              context: context,
+              initialDate: ref.read(selectedDietDayProvider),
+              firstDate: DateTime(2020),
+              lastDate: DateTime.now(),
+            );
+            if (picked != null) {
+              notifier.select(picked);
+            }
+          },
+        ),
       ],
     );
   }
@@ -144,54 +230,122 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _DateSelector extends StatelessWidget {
+class _DateSelector extends ConsumerWidget {
   const _DateSelector();
 
   @override
-  Widget build(BuildContext context) {
-    return const Row(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final day = ref.watch(selectedDietDayProvider);
+    final notifier = ref.read(selectedDietDayProvider.notifier);
+    final isToday = dateKey(day) == dateKey(DateTime.now());
+
+    return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.chevron_left, color: Colors.white, size: 34),
-        SizedBox(width: 24),
-        Icon(Icons.calendar_month_outlined, color: _DietColors.gold, size: 24),
-        SizedBox(width: 10),
-        Text(
-          'Today, May 30',
-          style: TextStyle(
-            color: _DietColors.softGold,
-            fontSize: 23,
-            fontWeight: FontWeight.w700,
+        IconButton(
+          tooltip: 'Previous day',
+          onPressed: () => notifier.shift(-1),
+          icon: const Icon(Icons.chevron_left, color: Colors.white, size: 34),
+        ),
+        const SizedBox(width: 12),
+        const Icon(
+          Icons.calendar_month_outlined,
+          color: _DietColors.gold,
+          size: 24,
+        ),
+        const SizedBox(width: 10),
+        Flexible(
+          child: Text(
+            dayLabel(day),
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _DietColors.softGold,
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
-        SizedBox(width: 24),
-        Icon(Icons.chevron_right, color: Colors.white, size: 34),
+        const SizedBox(width: 12),
+        IconButton(
+          tooltip: 'Next day',
+          onPressed: isToday ? null : () => notifier.shift(1),
+          icon: Icon(
+            Icons.chevron_right,
+            color: isToday ? Colors.white24 : Colors.white,
+            size: 34,
+          ),
+        ),
       ],
     );
   }
 }
 
-class _CalorieSummary extends StatelessWidget {
-  const _CalorieSummary({required this.macros});
+class _CalorieSummary extends ConsumerWidget {
+  const _CalorieSummary({required this.entries, required this.targets});
 
-  final List<_MacroData> macros;
+  final List<FoodEntry> entries;
+  final _Targets targets;
+
+  Future<void> _editGoal(BuildContext context, WidgetRef ref) async {
+    final goal = await showDialog<int?>(
+      context: context,
+      builder: (context) => _CalorieGoalDialog(current: targets.calories),
+    );
+
+    if (goal != null && context.mounted) {
+      await _guard(
+        context,
+        () => ref
+            .read(dietPreferencesProvider.notifier)
+            .setCalorieGoal(goal <= 0 ? null : goal),
+      );
+    }
+  }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    double sum(double Function(FoodEntry) pick) =>
+        entries.fold(0, (total, entry) => total + pick(entry));
+
+    final calories = sum((e) => e.calories);
+    final protein = sum((e) => e.protein);
+    final carbs = sum((e) => e.carbs);
+    final fat = sum((e) => e.fat);
+
+    final macros = [
+      _MacroData('PROTEIN', protein, targets.protein, _DietColors.protein),
+      _MacroData('CARBS', carbs, targets.carbs, _DietColors.gold),
+      _MacroData('FATS', fat, targets.fat, _DietColors.fat),
+    ];
+
+    final proteinKcal = protein * 4;
+    final carbsKcal = carbs * 4;
+    final fatKcal = fat * 9;
+    final macroKcal = proteinKcal + carbsKcal + fatKcal;
+    int share(double kcal) =>
+        macroKcal == 0 ? 0 : (kcal / macroKcal * 100).round();
+
     return _Panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _PanelHeader(title: 'CALORIE SUMMARY', action: 'Edit Goal'),
+          _PanelHeader(
+            title: 'CALORIE SUMMARY',
+            action: 'Edit Goal',
+            onTap: () => _editGoal(context, ref),
+          ),
           const SizedBox(height: 22),
           LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxWidth < 520;
+              final ring = _CalorieRing(
+                consumed: calories,
+                goal: targets.calories,
+              );
 
-              if (compact) {
+              if (constraints.maxWidth < 520) {
                 return Column(
                   children: [
-                    const _CalorieRing(),
+                    ring,
                     const SizedBox(height: 22),
                     for (final macro in macros) ...[
                       _MacroTile(data: macro),
@@ -203,7 +357,7 @@ class _CalorieSummary extends StatelessWidget {
 
               return Row(
                 children: [
-                  const _CalorieRing(),
+                  ring,
                   const SizedBox(width: 22),
                   for (var i = 0; i < macros.length; i++) ...[
                     Expanded(child: _MacroTile(data: macros[i])),
@@ -222,47 +376,50 @@ class _CalorieSummary extends StatelessWidget {
           const SizedBox(height: 20),
           Divider(color: Colors.white.withValues(alpha: 0.12)),
           const SizedBox(height: 16),
-          const _PanelHeader(
-            title: 'NUTRITION BREAKDOWN',
-            action: 'View Details',
-          ),
+          const _PanelHeader(title: 'NUTRITION BREAKDOWN'),
           const SizedBox(height: 16),
           ClipRRect(
             borderRadius: BorderRadius.circular(20),
-            child: const Row(
-              children: [
-                Expanded(
-                  flex: 31,
-                  child: ColoredBox(
-                    color: _DietColors.protein,
-                    child: SizedBox(height: 16),
+            child: macroKcal == 0
+                ? ColoredBox(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    child: const SizedBox(height: 16, width: double.infinity),
+                  )
+                : Row(
+                    children: [
+                      for (final (kcal, color) in [
+                        (proteinKcal, _DietColors.protein),
+                        (carbsKcal, _DietColors.gold),
+                        (fatKcal, _DietColors.fat),
+                      ])
+                        if (kcal > 0)
+                          Expanded(
+                            flex: math.max(1, kcal.round()),
+                            child: ColoredBox(
+                              color: color,
+                              child: const SizedBox(height: 16),
+                            ),
+                          ),
+                    ],
                   ),
-                ),
-                Expanded(
-                  flex: 40,
-                  child: ColoredBox(
-                    color: _DietColors.gold,
-                    child: SizedBox(height: 16),
-                  ),
-                ),
-                Expanded(
-                  flex: 29,
-                  child: ColoredBox(
-                    color: _DietColors.fat,
-                    child: SizedBox(height: 16),
-                  ),
-                ),
-              ],
-            ),
           ),
           const SizedBox(height: 14),
-          const Wrap(
+          Wrap(
             spacing: 24,
             runSpacing: 10,
             children: [
-              _Legend(color: _DietColors.protein, label: 'Protein 31% (142g)'),
-              _Legend(color: _DietColors.gold, label: 'Carbs 40% (186g)'),
-              _Legend(color: _DietColors.fat, label: 'Fats 29% (62g)'),
+              _Legend(
+                color: _DietColors.protein,
+                label: 'Protein ${share(proteinKcal)}% (${protein.round()}g)',
+              ),
+              _Legend(
+                color: _DietColors.gold,
+                label: 'Carbs ${share(carbsKcal)}% (${carbs.round()}g)',
+              ),
+              _Legend(
+                color: _DietColors.fat,
+                label: 'Fats ${share(fatKcal)}% (${fat.round()}g)',
+              ),
             ],
           ),
         ],
@@ -271,11 +428,76 @@ class _CalorieSummary extends StatelessWidget {
   }
 }
 
-class _CalorieRing extends StatelessWidget {
-  const _CalorieRing();
+class _CalorieGoalDialog extends StatefulWidget {
+  const _CalorieGoalDialog({required this.current});
+
+  final int current;
+
+  @override
+  State<_CalorieGoalDialog> createState() => _CalorieGoalDialogState();
+}
+
+class _CalorieGoalDialogState extends State<_CalorieGoalDialog> {
+  late final _controller = TextEditingController(text: '${widget.current}');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final value = int.tryParse(_controller.text.trim());
+    if (value == null || value < 800 || value > 10000) {
+      return;
+    }
+    Navigator.pop(context, value);
+  }
 
   @override
   Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF141414),
+      title: const Text('Daily calorie goal'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: const InputDecoration(
+          suffixText: 'kcal',
+          helperText: 'Between 800 and 10,000',
+        ),
+        onSubmitted: (_) => _save(),
+      ),
+      actions: [
+        TextButton(
+          // Zero clears the personal goal and falls back to the diet plan.
+          onPressed: () => Navigator.pop(context, 0),
+          child: const Text('Use plan goal'),
+        ),
+        TextButton(
+          onPressed: _save,
+          child: const Text(
+            'Save',
+            style: TextStyle(color: _DietColors.softGold),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CalorieRing extends StatelessWidget {
+  const _CalorieRing({required this.consumed, required this.goal});
+
+  final double consumed;
+  final int goal;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = goal == 0 ? 0.0 : (consumed / goal).clamp(0.0, 1.0);
+
     return SizedBox(
       width: 180,
       child: Column(
@@ -284,20 +506,20 @@ class _CalorieRing extends StatelessWidget {
             width: 162,
             height: 162,
             child: CustomPaint(
-              painter: _RingPainter(),
-              child: const Column(
+              painter: _RingPainter(progress),
+              child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    '1,842',
-                    style: TextStyle(
+                    _thousands(consumed.round()),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 36,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
-                  SizedBox(height: 4),
-                  Text(
+                  const SizedBox(height: 4),
+                  const Text(
                     'Consumed',
                     style: TextStyle(color: _DietColors.muted, fontSize: 17),
                   ),
@@ -306,9 +528,9 @@ class _CalorieRing extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
-            '/ 2,400 kcal',
-            style: TextStyle(color: _DietColors.softGold, fontSize: 17),
+          Text(
+            '/ ${_thousands(goal)} kcal',
+            style: const TextStyle(color: _DietColors.softGold, fontSize: 17),
           ),
         ],
       ),
@@ -338,7 +560,7 @@ class _MacroTile extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         Text(
-          data.value,
+          '${data.value.round()} g',
           style: const TextStyle(
             color: Colors.white,
             fontSize: 30,
@@ -346,12 +568,15 @@ class _MacroTile extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Text(data.goal, style: TextStyle(color: data.color, fontSize: 16)),
+        Text(
+          '/ ${data.goal} g',
+          style: TextStyle(color: data.color, fontSize: 16),
+        ),
         const SizedBox(height: 16),
         ClipRRect(
           borderRadius: BorderRadius.circular(18),
           child: LinearProgressIndicator(
-            value: data.progress,
+            value: data.goal == 0 ? 0 : (data.value / data.goal).clamp(0, 1),
             minHeight: 10,
             backgroundColor: Colors.white.withValues(alpha: 0.16),
             valueColor: AlwaysStoppedAnimation(data.color),
@@ -372,29 +597,85 @@ class _MacroTile extends StatelessWidget {
   }
 }
 
-class _MealsPanel extends StatelessWidget {
-  const _MealsPanel({required this.meals});
+class _MealsPanel extends ConsumerWidget {
+  const _MealsPanel({required this.entries});
 
-  final List<_MealData> meals;
+  final List<FoodEntry> entries;
+
+  Future<void> _remove(
+    BuildContext context,
+    WidgetRef ref,
+    FoodEntry entry,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF141414),
+        title: const Text('Remove food?'),
+        content: Text('Remove ${entry.name} from ${entry.mealType}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Remove',
+              style: TextStyle(color: Color(0xFFFF5A4F)),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && context.mounted) {
+      await _guard(
+        context,
+        () => ref.read(foodLogProvider.notifier).remove(entry.id),
+      );
+    }
+  }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final total = entries.fold<double>(0, (sum, e) => sum + e.calories);
+    final sorted = [...entries]
+      ..sort((a, b) {
+        final byMeal = mealTypes
+            .indexOf(a.mealType)
+            .compareTo(mealTypes.indexOf(b.mealType));
+        return byMeal != 0 ? byMeal : a.time.compareTo(b.time);
+      });
+
     return _Panel(
       child: Column(
         children: [
-          const _PanelHeader(title: 'MEALS', action: '1,842 kcal'),
+          _PanelHeader(
+            title: 'MEALS',
+            action: '${_thousands(total.round())} kcal',
+          ),
           const SizedBox(height: 14),
-          for (final meal in meals) _MealRow(meal: meal),
+          if (sorted.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text(
+                'No food logged for this day yet.',
+                style: TextStyle(color: _DietColors.muted, fontSize: 15),
+              ),
+            )
+          else
+            for (final entry in sorted)
+              _MealRow(
+                entry: entry,
+                onRemove: () => _remove(context, ref, entry),
+              ),
           const SizedBox(height: 14),
           SizedBox(
             height: 58,
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const AddDietFormPage()),
-                );
-              },
+              onPressed: () => context.push(AurexRoutes.addFood),
               style: OutlinedButton.styleFrom(
                 foregroundColor: _DietColors.softGold,
                 side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
@@ -416,12 +697,15 @@ class _MealsPanel extends StatelessWidget {
 }
 
 class _MealRow extends StatelessWidget {
-  const _MealRow({required this.meal});
+  const _MealRow({required this.entry, required this.onRemove});
 
-  final _MealData meal;
+  final FoodEntry entry;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
+    final style = _mealStyle(entry.mealType);
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
       decoration: BoxDecoration(
@@ -431,47 +715,22 @@ class _MealRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 28,
-            backgroundColor: Colors.white.withValues(alpha: 0.06),
-            child: Icon(meal.icon, color: _DietColors.gold, size: 30),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 86,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  meal.meal,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  meal.time,
-                  style: const TextStyle(
-                    color: _DietColors.muted,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          _MealThumb(color: meal.color, icon: meal.icon),
-          const SizedBox(width: 16),
+          _MealThumb(color: style.$2, icon: style.$1),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  meal.title,
+                  '${entry.mealType} • ${entry.time}',
+                  style: const TextStyle(
+                    color: _DietColors.muted,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  entry.name,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -486,9 +745,12 @@ class _MealRow extends StatelessWidget {
                   spacing: 14,
                   runSpacing: 4,
                   children: [
-                    _MacroText(meal.protein, _DietColors.protein),
-                    _MacroText(meal.carbs, _DietColors.gold),
-                    _MacroText(meal.fats, _DietColors.fat),
+                    _MacroText(
+                      'P ${entry.protein.round()}g',
+                      _DietColors.protein,
+                    ),
+                    _MacroText('C ${entry.carbs.round()}g', _DietColors.gold),
+                    _MacroText('F ${entry.fat.round()}g', _DietColors.fat),
                   ],
                 ),
               ],
@@ -496,24 +758,30 @@ class _MealRow extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Text(
-            meal.calories,
+            '${entry.calories.round()} kcal',
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 17,
+              fontSize: 16,
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(width: 8),
-          const Icon(
-            Icons.chevron_right,
-            color: _DietColors.softGold,
-            size: 30,
+          IconButton(
+            tooltip: 'Remove',
+            onPressed: onRemove,
+            icon: const Icon(Icons.delete_outline, color: _DietColors.muted),
           ),
         ],
       ),
     );
   }
 }
+
+(IconData, Color) _mealStyle(String mealType) => switch (mealType) {
+  'Breakfast' => (Icons.wb_sunny_outlined, _DietColors.gold),
+  'Lunch' => (Icons.wb_sunny, const Color(0xFF73C94E)),
+  'Dinner' => (Icons.nightlight_round, const Color(0xFFFF8D3A)),
+  _ => (Icons.local_drink_outlined, const Color(0xFFEDEDED)),
+};
 
 class _MealThumb extends StatelessWidget {
   const _MealThumb({required this.color, required this.icon});
@@ -524,8 +792,8 @@ class _MealThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 74,
-      height: 74,
+      width: 64,
+      height: 64,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
         gradient: LinearGradient(
@@ -537,29 +805,50 @@ class _MealThumb extends StatelessWidget {
           ],
         ),
       ),
-      child: Icon(icon, color: Colors.black.withValues(alpha: 0.72), size: 34),
+      child: Icon(icon, color: Colors.black.withValues(alpha: 0.72), size: 30),
     );
   }
 }
 
-class _WaterPanel extends StatelessWidget {
-  const _WaterPanel();
+class _WaterPanel extends ConsumerWidget {
+  const _WaterPanel({required this.day});
+
+  final DateTime day;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    const total = WaterLogNotifier.dailyCups;
+    final key = dateKey(day);
+    final cups = ref.watch(waterLogProvider).value?[key] ?? 0;
+
     return _Panel(
       child: Column(
         children: [
-          const _PanelHeader(title: 'WATER INTAKE', action: '8 / 10 cups'),
+          _PanelHeader(title: 'WATER INTAKE', action: '$cups / $total cups'),
           const SizedBox(height: 18),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              for (var i = 0; i < 10; i++)
-                Icon(
-                  i < 8 ? Icons.local_drink : Icons.local_drink_outlined,
-                  color: i < 8 ? const Color(0xFF58AFFF) : Colors.white38,
-                  size: 35,
+              for (var i = 0; i < total; i++)
+                Flexible(
+                  child: IconButton(
+                    tooltip: 'Set water to ${i + 1} cups',
+                    padding: EdgeInsets.zero,
+                    // Tapping the last filled cup empties it again.
+                    onPressed: () => _guard(
+                      context,
+                      () => ref
+                          .read(waterLogProvider.notifier)
+                          .setCups(key, i + 1 == cups ? i : i + 1),
+                    ),
+                    icon: Icon(
+                      i < cups ? Icons.local_drink : Icons.local_drink_outlined,
+                      color: i < cups
+                          ? const Color(0xFF58AFFF)
+                          : Colors.white38,
+                      size: 32,
+                    ),
+                  ),
                 ),
             ],
           ),
@@ -569,113 +858,258 @@ class _WaterPanel extends StatelessWidget {
   }
 }
 
-class _BottomCards extends StatelessWidget {
-  const _BottomCards();
+class _MealPlanCard extends ConsumerWidget {
+  const _MealPlanCard({required this.planAsync});
+
+  final AsyncValue<MobileDietPlan?> planAsync;
 
   @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 520;
-        final cards = [
-          const _ActionCard(
-            icon: Icons.calendar_month_outlined,
-            title: 'MEAL PLAN',
-            value: 'High Protein Plan',
-            subtitle: '2,400 kcal • 5 meals',
-            color: _DietColors.protein,
-          ),
-          const _ActionCard(
-            icon: Icons.shopping_cart_outlined,
-            title: 'GROCERY LIST',
-            value: '12 items',
-            subtitle: 'View your grocery list',
-            color: _DietColors.gold,
-          ),
-        ];
+  Widget build(BuildContext context, WidgetRef ref) {
+    final plan = planAsync.value;
 
-        if (compact) {
-          return Column(
-            children: [cards[0], const SizedBox(height: 14), cards[1]],
-          );
-        }
+    final (String value, String subtitle) = switch (planAsync) {
+      _ when plan != null => (
+        plan.name,
+        [
+          if (plan.dailyCalories.isNotEmpty) '${plan.dailyCalories} kcal',
+          if (plan.meals.isNotEmpty) '${plan.meals.length} meals',
+          if (plan.dietType.isNotEmpty) plan.dietType,
+        ].join(' • '),
+      ),
+      AsyncError(:final error) => ('Unavailable', error.toString()),
+      AsyncLoading() => ('Loading...', 'Fetching your diet plan'),
+      _ => ('No plan yet', 'No diet plans have been published'),
+    };
 
-        return Row(
+    return _Panel(
+      padding: const EdgeInsets.all(20),
+      child: InkWell(
+        onTap: plan == null
+            ? (planAsync.hasError
+                  ? () => ref.invalidate(dietPlansProvider)
+                  : null)
+            : () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: const Color(0xFF141414),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                builder: (context) => _MealPlanSheet(plan: plan),
+              ),
+        child: Row(
           children: [
-            Expanded(child: cards[0]),
-            const SizedBox(width: 16),
-            Expanded(child: cards[1]),
+            CircleAvatar(
+              radius: 34,
+              backgroundColor: _DietColors.protein.withValues(alpha: 0.12),
+              child: const Icon(
+                Icons.calendar_month_outlined,
+                color: _DietColors.protein,
+                size: 34,
+              ),
+            ),
+            const SizedBox(width: 18),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'MEAL PLAN',
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _DietColors.protein,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _DietColors.muted,
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              planAsync.hasError ? Icons.refresh : Icons.chevron_right,
+              color: _DietColors.softGold,
+              size: 30,
+            ),
           ],
-        );
-      },
+        ),
+      ),
     );
   }
 }
 
-class _ActionCard extends StatelessWidget {
-  const _ActionCard({
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.subtitle,
-    required this.color,
-  });
+class _MealPlanSheet extends ConsumerWidget {
+  const _MealPlanSheet({required this.plan});
 
-  final IconData icon;
-  final String title;
-  final String value;
-  final String subtitle;
-  final Color color;
+  final MobileDietPlan plan;
 
   @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      padding: const EdgeInsets.all(20),
-      child: Row(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final plans = ref.watch(dietPlansProvider).value ?? const [];
+
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.75,
+      maxChildSize: 0.95,
+      builder: (context, controller) => ListView(
+        controller: controller,
+        padding: const EdgeInsets.fromLTRB(24, 22, 24, 32),
         children: [
-          CircleAvatar(
-            radius: 34,
-            backgroundColor: color.withValues(alpha: 0.12),
-            child: Icon(icon, color: color, size: 34),
+          Text(
+            plan.name,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w900,
+            ),
           ),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 18,
+          const SizedBox(height: 8),
+          Text(
+            [
+              plan.goal,
+              plan.level,
+              plan.duration,
+            ].where((value) => value.isNotEmpty).join(' • '),
+            style: const TextStyle(color: _DietColors.softGold, fontSize: 15),
+          ),
+          if (plan.description.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(
+              plan.description,
+              style: const TextStyle(
+                color: _DietColors.muted,
+                fontSize: 15,
+                height: 1.4,
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final (label, value) in [
+                ('Calories', plan.dailyCalories),
+                ('Protein', plan.protein),
+                ('Carbs', plan.carbs),
+                ('Fat', plan.fat),
+              ])
+                if (value.isNotEmpty)
+                  Chip(
+                    label: Text('$label: $value'),
+                    backgroundColor: Colors.white.withValues(alpha: 0.05),
+                  ),
+            ],
+          ),
+          if (plan.meals.isNotEmpty) ...[
+            const SizedBox(height: 22),
+            const Text(
+              'MEALS',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            for (final meal in plan.meals)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  meal.name,
+                  style: const TextStyle(
+                    color: Colors.white,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _DietColors.muted,
-                    fontSize: 15,
-                  ),
+                subtitle: Text(
+                  meal.food,
+                  style: const TextStyle(color: _DietColors.muted),
                 ),
-              ],
+                trailing: meal.calories.isEmpty
+                    ? null
+                    : Text(
+                        meal.calories,
+                        style: const TextStyle(color: _DietColors.softGold),
+                      ),
+              ),
+          ],
+          for (final (title, text) in [
+            ('INSTRUCTIONS', plan.mealInstructions),
+            ('NUTRITIONIST NOTES', plan.nutritionistNotes),
+          ])
+            if (text.isNotEmpty) ...[
+              const SizedBox(height: 18),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                text,
+                style: const TextStyle(
+                  color: _DietColors.muted,
+                  fontSize: 15,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          if (plans.length > 1) ...[
+            const SizedBox(height: 24),
+            const Text(
+              'SWITCH PLAN',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
             ),
-          ),
-          const Icon(
-            Icons.chevron_right,
-            color: _DietColors.softGold,
-            size: 30,
-          ),
+            for (final option in plans)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  option.name,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                subtitle: Text(
+                  option.goal,
+                  style: const TextStyle(color: _DietColors.muted),
+                ),
+                trailing: option.id == plan.id
+                    ? const Icon(Icons.check, color: _DietColors.softGold)
+                    : null,
+                onTap: () {
+                  final messenger = ScaffoldMessenger.of(context);
+                  Navigator.pop(context);
+                  ref
+                      .read(dietPreferencesProvider.notifier)
+                      .selectPlan(option.id)
+                      .catchError((Object error) {
+                        messenger.showSnackBar(
+                          SnackBar(content: Text(error.toString())),
+                        );
+                      });
+                },
+              ),
+          ],
         ],
       ),
     );
@@ -683,13 +1117,25 @@ class _ActionCard extends StatelessWidget {
 }
 
 class _PanelHeader extends StatelessWidget {
-  const _PanelHeader({required this.title, required this.action});
+  const _PanelHeader({required this.title, this.action, this.onTap});
 
   final String title;
-  final String action;
+  final String? action;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final label = action == null
+        ? null
+        : Text(
+            action!,
+            style: const TextStyle(
+              color: _DietColors.softGold,
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+            ),
+          );
+
     return Row(
       children: [
         Expanded(
@@ -702,16 +1148,18 @@ class _PanelHeader extends StatelessWidget {
             ),
           ),
         ),
-        Text(
-          action,
-          style: const TextStyle(
-            color: _DietColors.softGold,
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(width: 6),
-        const Icon(Icons.chevron_right, color: _DietColors.softGold, size: 24),
+        if (label != null)
+          onTap == null
+              ? label
+              : TextButton.icon(
+                  onPressed: onTap,
+                  iconAlignment: IconAlignment.end,
+                  icon: const Icon(
+                    Icons.chevron_right,
+                    color: _DietColors.softGold,
+                  ),
+                  label: label,
+                ),
       ],
     );
   }
@@ -745,21 +1193,30 @@ class _Panel extends StatelessWidget {
 }
 
 class _IconBox extends StatelessWidget {
-  const _IconBox({required this.icon});
+  const _IconBox({required this.icon, required this.tooltip, this.onTap});
 
   final IconData icon;
+  final String tooltip;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 58,
-      height: 58,
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        child: Container(
+          width: 58,
+          height: 58,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          ),
+          child: Icon(icon, color: _DietColors.gold, size: 28),
+        ),
       ),
-      child: Icon(icon, color: _DietColors.gold, size: 28),
     );
   }
 }
@@ -802,6 +1259,10 @@ class _MacroText extends StatelessWidget {
 }
 
 class _RingPainter extends CustomPainter {
+  _RingPainter(this.progress);
+
+  final double progress;
+
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
@@ -820,58 +1281,64 @@ class _RingPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     canvas.drawCircle(center, radius, base);
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -1.45,
-      4.85,
-      false,
-      active,
-    );
+    if (progress > 0) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        -math.pi / 2,
+        2 * math.pi * progress,
+        false,
+        active,
+      );
+    }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _RingPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }
 
 class _MacroData {
-  const _MacroData(
-    this.label,
-    this.value,
-    this.goal,
-    this.progress,
-    this.color,
-  );
+  const _MacroData(this.label, this.value, this.goal, this.color);
 
   final String label;
-  final String value;
-  final String goal;
-  final double progress;
+  final double value;
+  final int goal;
   final Color color;
 }
 
-class _MealData {
-  const _MealData({
-    required this.icon,
-    required this.meal,
-    required this.time,
-    required this.title,
-    required this.calories,
-    required this.protein,
-    required this.carbs,
-    required this.fats,
-    required this.color,
-  });
+const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
 
-  final IconData icon;
-  final String meal;
-  final String time;
-  final String title;
-  final String calories;
-  final String protein;
-  final String carbs;
-  final String fats;
-  final Color color;
+/// `Today, May 30`, `Yesterday, May 29` or `Mon, May 27`.
+String dayLabel(DateTime day) {
+  final today = dateOnly(DateTime.now());
+  final date = '${_months[day.month - 1]} ${day.day}';
+  final difference = today.difference(dateOnly(day)).inDays;
+
+  return switch (difference) {
+    0 => 'Today, $date',
+    1 => 'Yesterday, $date',
+    _ => '${_weekdays[day.weekday - 1]}, $date',
+  };
 }
+
+String _thousands(int value) => value.toString().replaceAllMapped(
+  RegExp(r'\B(?=(\d{3})+(?!\d))'),
+  (match) => ',',
+);
 
 class _DietColors {
   const _DietColors._();

@@ -1,28 +1,32 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'api_client.dart';
-import 'bottom_nav.dart';
-import 'workout_detail.dart';
+import 'landing.dart' show aurexBodyParts, equipmentArtwork;
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class ExerciseDetailListPage extends StatefulWidget {
+class ExerciseDetailListPage extends ConsumerStatefulWidget {
   const ExerciseDetailListPage({
     super.key,
     required this.groupType,
     required this.title,
-    required this.count,
-    required this.image,
   });
 
+  /// Either `Body Part` or `Equipment`.
   final String groupType;
   final String title;
-  final int count;
-  final String image;
 
   @override
-  State<ExerciseDetailListPage> createState() => _ExerciseDetailListPageState();
+  ConsumerState<ExerciseDetailListPage> createState() =>
+      _ExerciseDetailListPageState();
 }
 
-class _ExerciseDetailListPageState extends State<ExerciseDetailListPage> {
+enum _SortOrder { name, level }
+
+class _ExerciseDetailListPageState
+    extends ConsumerState<ExerciseDetailListPage> {
   static const _levelFilters = [
     'All Levels',
     'Beginner',
@@ -40,143 +44,175 @@ class _ExerciseDetailListPageState extends State<ExerciseDetailListPage> {
     (Icons.self_improvement_rounded, 'Abs'),
   ];
 
+  final _search = TextEditingController();
   int _levelIndex = 0;
   int _muscleIndex = 0;
-  bool _isLoading = true;
-  String? _error;
-  List<MobileExercise> _exercises = const [];
+  _SortOrder _sort = _SortOrder.name;
+
+  bool get _isEquipment => widget.groupType == 'Equipment';
 
   @override
   void initState() {
     super.initState();
-    _loadExercises();
+    _search.addListener(() => setState(() {}));
   }
 
-  Future<void> _loadExercises({bool forceRefresh = false}) async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-
-    try {
-      final exercises = await AurexApiClient.fetchExercises(
-        forceRefresh: forceRefresh,
-      );
-      if (!mounted) return;
-
-      setState(() {
-        _exercises = exercises;
-        _isLoading = false;
-      });
-    } on AurexApiException catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        _error = error.message;
-        _isLoading = false;
-      });
-    }
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
   }
 
-  List<MobileExercise> get _filteredExercises {
+  List<MobileExercise> _groupExercises(List<MobileExercise> exercises) {
     final groupTitle = _normalize(widget.title);
+
+    return exercises.where((exercise) {
+      if (!_isEquipment) {
+        return _normalize(exercise.bodyPart) == groupTitle;
+      }
+
+      final equipment = _normalize(exercise.equipment);
+      return equipment.isNotEmpty &&
+          (equipment.contains(groupTitle) || groupTitle.contains(equipment));
+    }).toList();
+  }
+
+  List<MobileExercise> _filter(List<MobileExercise> exercises) {
     final level = _levelFilters[_levelIndex];
     final muscle = _muscles[_muscleIndex].$2;
+    final query = _normalize(_search.text);
 
-    return _exercises.where((exercise) {
-      final equipment = _normalize(exercise.equipment);
-      final matchesGroup = widget.groupType == 'Body Part'
-          ? _normalize(exercise.bodyPart) == groupTitle
-          : equipment.isNotEmpty &&
-                (equipment.contains(groupTitle) ||
-                    groupTitle.contains(equipment));
-
+    final filtered = exercises.where((exercise) {
       final matchesLevel =
           level == 'All Levels' ||
           _normalize(exercise.level) == _normalize(level);
 
       final matchesMuscle =
+          !_isEquipment ||
           muscle == 'All' ||
           _normalize(exercise.bodyPart) == _normalize(muscle);
 
-      return matchesGroup && matchesLevel && matchesMuscle;
+      final matchesQuery =
+          query.isEmpty ||
+          _normalize(
+            '${exercise.name} ${exercise.bodyPart} ${exercise.equipment} '
+            '${exercise.muscleTags.join(' ')}',
+          ).contains(query);
+
+      return matchesLevel && matchesMuscle && matchesQuery;
     }).toList();
+
+    return filtered..sort(
+      (a, b) => switch (_sort) {
+        _SortOrder.name => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        _SortOrder.level =>
+          _levelRank(a.level).compareTo(_levelRank(b.level)) != 0
+              ? _levelRank(a.level).compareTo(_levelRank(b.level))
+              : a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      },
+    );
+  }
+
+  static int _levelRank(String level) {
+    final index = _levelFilters.indexWhere(
+      (option) => _normalize(option) == _normalize(level),
+    );
+    return index == -1 ? _levelFilters.length : index;
+  }
+
+  String _headerArtwork() {
+    if (_isEquipment) {
+      return equipmentArtwork(widget.title) ?? 'assets/images/placeholder.png';
+    }
+
+    for (final (name, asset) in aurexBodyParts) {
+      if (_normalize(name) == _normalize(widget.title)) {
+        return asset;
+      }
+    }
+    return 'assets/images/placeholder.png';
   }
 
   @override
   Widget build(BuildContext context) {
-    final filteredExercises = _filteredExercises;
+    final exercisesAsync = ref.watch(exercisesProvider);
+    final groupExercises = _groupExercises(exercisesAsync.value ?? const []);
+    final filteredExercises = _filter(groupExercises);
+    Future<void> refresh() =>
+        ref.refresh(exercisesProvider.future).then((_) {}, onError: (_) {});
 
     return Scaffold(
       backgroundColor: _DetailColors.black,
       body: SafeArea(
-        child: Stack(
-          children: [
-            RefreshIndicator(
-              color: _DetailColors.gold,
-              backgroundColor: _DetailColors.black,
-              onRefresh: () => _loadExercises(forceRefresh: true),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 18, 24, 122),
-                children: [
-                  const _TopBar(),
-                  const SizedBox(height: 28),
-                  _Header(
-                    groupType: widget.groupType,
-                    title: widget.title,
-                    count: _isLoading ? widget.count : filteredExercises.length,
-                    image: widget.image,
-                  ),
-                  const SizedBox(height: 24),
-                  _SearchAndFilter(title: widget.title),
-                  const SizedBox(height: 24),
-                  _LevelFilters(
-                    filters: _levelFilters,
-                    selectedIndex: _levelIndex,
-                    onSelected: (index) {
-                      setState(() {
-                        _levelIndex = index;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 30),
-                  const Text(
-                    'TARGET MUSCLE',
-                    style: TextStyle(
-                      color: _DetailColors.muted,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.4,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _MuscleFilters(
-                    selectedIndex: _muscleIndex,
-                    onSelected: (index) {
-                      setState(() {
-                        _muscleIndex = index;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 28),
-                  _ResultSortRow(count: filteredExercises.length),
-                  const SizedBox(height: 14),
-                  _ExerciseContentState(
-                    isLoading: _isLoading,
-                    error: _error,
-                    onRetry: () => _loadExercises(forceRefresh: true),
-                    child: _ExerciseRows(exercises: filteredExercises),
-                  ),
-                ],
+        child: RefreshIndicator(
+          color: _DetailColors.gold,
+          backgroundColor: _DetailColors.black,
+          onRefresh: refresh,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 18, 24, 122),
+            children: [
+              _TopBar(
+                fallback: _isEquipment
+                    ? AurexRoutes.equipment
+                    : AurexRoutes.bodyParts,
               ),
-            ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(),
-            ),
-          ],
+              const SizedBox(height: 28),
+              _Header(
+                groupType: widget.groupType,
+                title: widget.title,
+                count: groupExercises.length,
+                image: _headerArtwork(),
+              ),
+              const SizedBox(height: 24),
+              _SearchField(title: widget.title, controller: _search),
+              const SizedBox(height: 24),
+              _LevelFilters(
+                filters: _levelFilters,
+                selectedIndex: _levelIndex,
+                onSelected: (index) {
+                  setState(() {
+                    _levelIndex = index;
+                  });
+                },
+              ),
+              if (_isEquipment) ...[
+                const SizedBox(height: 30),
+                const Text(
+                  'TARGET MUSCLE',
+                  style: TextStyle(
+                    color: _DetailColors.muted,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _MuscleFilters(
+                  selectedIndex: _muscleIndex,
+                  onSelected: (index) {
+                    setState(() {
+                      _muscleIndex = index;
+                    });
+                  },
+                ),
+              ],
+              const SizedBox(height: 28),
+              _ResultSortRow(
+                count: filteredExercises.length,
+                sort: _sort,
+                onSort: (sort) => setState(() => _sort = sort),
+              ),
+              const SizedBox(height: 14),
+              _ExerciseContentState(
+                isLoading: exercisesAsync.isLoading && !exercisesAsync.hasValue,
+                error: exercisesAsync.hasValue
+                    ? null
+                    : exercisesAsync.error?.toString(),
+                onRetry: refresh,
+                child: _ExerciseRows(exercises: filteredExercises),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -184,14 +220,17 @@ class _ExerciseDetailListPageState extends State<ExerciseDetailListPage> {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar();
+  const _TopBar({required this.fallback});
+
+  final String fallback;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
         IconButton(
-          onPressed: () => Navigator.of(context).pop(),
+          tooltip: 'Back',
+          onPressed: () => popOrGo(context, fallback),
           icon: const Icon(Icons.arrow_back, color: Colors.white, size: 32),
         ),
         const Spacer(),
@@ -201,14 +240,7 @@ class _TopBar extends StatelessWidget {
           fit: BoxFit.contain,
         ),
         const Spacer(),
-        IconButton(
-          onPressed: () {},
-          icon: const Icon(
-            Icons.bookmark_border,
-            color: Colors.white,
-            size: 31,
-          ),
-        ),
+        const SizedBox(width: 48),
       ],
     );
   }
@@ -293,67 +325,38 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _SearchAndFilter extends StatelessWidget {
-  const _SearchAndFilter({required this.title});
+class _SearchField extends StatelessWidget {
+  const _SearchField({required this.title, required this.controller});
 
   final String title;
+  final TextEditingController controller;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: TextField(
-            style: const TextStyle(color: Colors.white),
-            cursorColor: _DetailColors.gold,
-            decoration: InputDecoration(
-              hintText: 'Search exercises in $title',
-              hintStyle: const TextStyle(
-                color: _DetailColors.muted,
-                fontSize: 16,
-              ),
-              prefixIcon: const Icon(
-                Icons.search,
-                color: _DetailColors.muted,
-                size: 31,
-              ),
-              filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.035),
-              contentPadding: const EdgeInsets.symmetric(vertical: 20),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(
-                  color: Colors.white.withValues(alpha: 0.16),
-                ),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(color: _DetailColors.gold),
-              ),
-            ),
-          ),
+    return TextField(
+      controller: controller,
+      style: const TextStyle(color: Colors.white),
+      cursorColor: _DetailColors.gold,
+      decoration: InputDecoration(
+        hintText: 'Search exercises in $title',
+        hintStyle: const TextStyle(color: _DetailColors.muted, fontSize: 16),
+        prefixIcon: const Icon(
+          Icons.search,
+          color: _DetailColors.muted,
+          size: 31,
         ),
-        const SizedBox(width: 14),
-        SizedBox(
-          height: 64,
-          child: OutlinedButton.icon(
-            onPressed: () {},
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _DetailColors.gold,
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-            ),
-            icon: const Icon(Icons.filter_alt_outlined, size: 27),
-            label: const Text(
-              'Filter',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-            ),
-          ),
+        filled: true,
+        fillColor: Colors.white.withValues(alpha: 0.035),
+        contentPadding: const EdgeInsets.symmetric(vertical: 20),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
         ),
-      ],
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: _DetailColors.gold),
+        ),
+      ),
     );
   }
 }
@@ -466,9 +469,15 @@ class _MuscleFilters extends StatelessWidget {
 }
 
 class _ResultSortRow extends StatelessWidget {
-  const _ResultSortRow({required this.count});
+  const _ResultSortRow({
+    required this.count,
+    required this.sort,
+    required this.onSort,
+  });
 
   final int count;
+  final _SortOrder sort;
+  final ValueChanged<_SortOrder> onSort;
 
   @override
   Widget build(BuildContext context) {
@@ -499,26 +508,39 @@ class _ResultSortRow extends StatelessWidget {
           style: TextStyle(color: _DetailColors.muted, fontSize: 16),
         ),
         const SizedBox(width: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.035),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-          ),
-          child: const Row(
-            children: [
-              Text(
-                'Popularity',
-                style: TextStyle(color: _DetailColors.gold, fontSize: 16),
-              ),
-              SizedBox(width: 8),
-              Icon(
-                Icons.keyboard_arrow_down,
-                color: _DetailColors.gold,
-                size: 22,
-              ),
-            ],
+        PopupMenuButton<_SortOrder>(
+          initialValue: sort,
+          onSelected: onSort,
+          color: const Color(0xFF141414),
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: _SortOrder.name, child: Text('Name')),
+            PopupMenuItem(value: _SortOrder.level, child: Text('Level')),
+          ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.035),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  sort == _SortOrder.name ? 'Name' : 'Level',
+                  style: const TextStyle(
+                    color: _DetailColors.gold,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(
+                  Icons.keyboard_arrow_down,
+                  color: _DetailColors.gold,
+                  size: 22,
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -634,18 +656,7 @@ class _ExerciseRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => WorkoutDetailPage(
-              title: exercise.name,
-              muscle: exercise.bodyPart,
-              level: exercise.level,
-              reps: exercise.reps,
-            ),
-          ),
-        );
-      },
+      onTap: () => context.push(AurexRoutes.exercise(exercise.id)),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 360;
@@ -675,28 +686,16 @@ class _ExerciseRow extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              exercise.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 21,
-                                fontWeight: FontWeight.w900,
-                                height: 1.1,
-                              ),
-                            ),
-                          ),
-                          const Icon(
-                            Icons.bookmark_border,
-                            color: Colors.white,
-                            size: 28,
-                          ),
-                        ],
+                      Text(
+                        exercise.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w900,
+                          height: 1.1,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       Row(

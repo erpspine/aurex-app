@@ -1,33 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'api_client.dart';
-import 'bottom_nav.dart';
+import 'models.dart';
+import 'providers.dart';
 
-class ProfilePage extends StatefulWidget {
+class ProfilePage extends ConsumerStatefulWidget {
   const ProfilePage({super.key});
 
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  ConsumerState<ProfilePage> createState() => _ProfilePageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> {
-  late Future<MobileProfile> _profileFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _profileFuture = AurexApiClient.fetchProfile();
-  }
-
-  void _reload() {
-    setState(() {
-      _profileFuture = AurexApiClient.fetchProfile();
-    });
-  }
+class _ProfilePageState extends ConsumerState<ProfilePage> {
+  bool _uploadingPhoto = false;
 
   Future<void> _editProfile(MobileProfile profile) async {
-    final updated = await showModalBottomSheet<bool>(
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _ProfileColors.panel,
@@ -36,13 +26,23 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
       builder: (context) => _EditProfileSheet(profile: profile),
     );
+  }
 
-    if (updated == true) {
-      _reload();
-    }
+  Future<void> _changePassword() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _ProfileColors.panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => const _ChangePasswordSheet(),
+    );
   }
 
   Future<void> _changePhoto() async {
+    final messenger = ScaffoldMessenger.of(context);
+
     try {
       final image = await ImagePicker().pickImage(
         source: ImageSource.gallery,
@@ -54,88 +54,70 @@ class _ProfilePageState extends State<ProfilePage> {
         return;
       }
 
-      await AurexApiClient.uploadProfilePhoto(image.path);
-      if (!mounted) return;
+      setState(() => _uploadingPhoto = true);
+      // Bytes rather than a file path so the upload also works on web.
+      final bytes = await image.readAsBytes();
+      await ref.read(profileProvider.notifier).uploadPhoto(bytes, image.name);
 
-      _reload();
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('Profile photo updated successfully.')),
       );
     } on AurexApiException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final profileAsync = ref.watch(profileProvider);
+    final profile = profileAsync.value;
+
     return Scaffold(
       backgroundColor: _ProfileColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
-          children: [
-            FutureBuilder<MobileProfile>(
-              future: _profileFuture,
-              builder: (context, snapshot) {
-                final profile = snapshot.data;
-
-                if (snapshot.connectionState == ConnectionState.waiting &&
-                    profile == null) {
-                  return const Center(
-                    child: CircularProgressIndicator(
-                      color: _ProfileColors.softGold,
-                    ),
-                  );
-                }
-
-                if (snapshot.hasError && profile == null) {
-                  return _ErrorState(
-                    message: snapshot.error.toString(),
-                    onRetry: _reload,
-                  );
-                }
-
-                return RefreshIndicator(
-                  color: _ProfileColors.gold,
-                  onRefresh: () async => _reload(),
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(24, 54, 24, 126),
-                    children: [
-                      const _TopBar(),
-                      const SizedBox(height: 26),
-                      _ProfileHero(
-                        profile: profile!,
-                        onEdit: () => _editProfile(profile),
-                        onPhotoEdit: _changePhoto,
-                      ),
-                      const SizedBox(height: 28),
-                      _ProfileStats(profile: profile),
-                      const SizedBox(height: 28),
-                      _MembershipPanel(profile: profile),
-                      const SizedBox(height: 22),
-                      _CompletionCard(percent: profile.completionPercent),
-                      const SizedBox(height: 22),
-                      _DetailsPanel(profile: profile),
-                      const SizedBox(height: 22),
-                      _SettingsPanel(onEdit: () => _editProfile(profile)),
-                      const SizedBox(height: 22),
-                      const _LogoutButton(),
-                    ],
-                  ),
-                );
-              },
+        child: switch (profileAsync) {
+          _ when profile != null => RefreshIndicator(
+            color: _ProfileColors.gold,
+            onRefresh: () => ref.read(profileProvider.notifier).reload(),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 54, 24, 126),
+              children: [
+                const _TopBar(),
+                const SizedBox(height: 26),
+                _ProfileHero(
+                  profile: profile,
+                  uploadingPhoto: _uploadingPhoto,
+                  onPhotoEdit: _changePhoto,
+                ),
+                const SizedBox(height: 28),
+                _ProfileStats(profile: profile),
+                const SizedBox(height: 28),
+                _MembershipPanel(profile: profile),
+                const SizedBox(height: 22),
+                _CompletionCard(percent: profile.completionPercent),
+                const SizedBox(height: 22),
+                _DetailsPanel(profile: profile),
+                const SizedBox(height: 22),
+                _SettingsPanel(
+                  onEdit: () => _editProfile(profile),
+                  onChangePassword: _changePassword,
+                ),
+                const SizedBox(height: 22),
+                const _LogoutButton(),
+              ],
             ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 4),
-            ),
-          ],
-        ),
+          ),
+          AsyncError(:final error) => _ErrorState(
+            message: error.toString(),
+            onRetry: () => ref.invalidate(profileProvider),
+          ),
+          _ => const Center(
+            child: CircularProgressIndicator(color: _ProfileColors.softGold),
+          ),
+        },
       ),
     );
   }
@@ -146,24 +128,12 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Spacer(),
-        Image.asset(
-          'assets/images/placeholder.png',
-          width: 176,
-          fit: BoxFit.contain,
-        ),
-        const Spacer(),
-        IconButton(
-          onPressed: () {},
-          icon: const Icon(
-            Icons.notifications_none,
-            color: Colors.white,
-            size: 31,
-          ),
-        ),
-      ],
+    return Center(
+      child: Image.asset(
+        'assets/images/placeholder.png',
+        width: 176,
+        fit: BoxFit.contain,
+      ),
     );
   }
 }
@@ -171,12 +141,12 @@ class _TopBar extends StatelessWidget {
 class _ProfileHero extends StatelessWidget {
   const _ProfileHero({
     required this.profile,
-    required this.onEdit,
+    required this.uploadingPhoto,
     required this.onPhotoEdit,
   });
 
   final MobileProfile profile;
-  final VoidCallback onEdit;
+  final bool uploadingPhoto;
   final VoidCallback onPhotoEdit;
 
   @override
@@ -195,7 +165,16 @@ class _ProfileHero extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
               child: ClipOval(
-                child: _AvatarImage(url: profile.profilePhotoUrl),
+                child: uploadingPhoto
+                    ? const ColoredBox(
+                        color: _ProfileColors.panel,
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: _ProfileColors.softGold,
+                          ),
+                        ),
+                      )
+                    : _AvatarImage(url: profile.profilePhotoUrl),
               ),
             ),
             Positioned(
@@ -205,9 +184,13 @@ class _ProfileHero extends StatelessWidget {
                 radius: 22,
                 backgroundColor: _ProfileColors.softGold,
                 child: IconButton(
-                  tooltip: 'Edit profile',
-                  onPressed: onPhotoEdit,
-                  icon: const Icon(Icons.edit, color: Colors.black, size: 18),
+                  tooltip: 'Change photo',
+                  onPressed: uploadingPhoto ? null : onPhotoEdit,
+                  icon: const Icon(
+                    Icons.photo_camera,
+                    color: Colors.black,
+                    size: 18,
+                  ),
                 ),
               ),
             ),
@@ -586,19 +569,32 @@ class _InfoRow extends StatelessWidget {
 }
 
 class _SettingsPanel extends StatelessWidget {
-  const _SettingsPanel({required this.onEdit});
+  const _SettingsPanel({required this.onEdit, required this.onChangePassword});
 
   final VoidCallback onEdit;
+  final VoidCallback onChangePassword;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: _panelDecoration(),
-      child: _SettingsRow(
-        icon: Icons.person_outline,
-        title: 'Edit Profile',
-        subtitle: 'Update personal details, height, weight and goals',
-        onTap: onEdit,
+      child: Column(
+        children: [
+          _SettingsRow(
+            icon: Icons.person_outline,
+            title: 'Edit Profile',
+            subtitle: 'Update personal details, height, weight and goals',
+            onTap: onEdit,
+          ),
+          Divider(height: 1, color: Colors.white.withValues(alpha: 0.1)),
+          _SettingsRow(
+            icon: Icons.lock_outline,
+            title: 'Change Password',
+            subtitle:
+                'Use at least 8 characters with upper, lower case and a number',
+            onTap: onChangePassword,
+          ),
+        ],
       ),
     );
   }
@@ -666,16 +662,16 @@ class _SettingsRow extends StatelessWidget {
   }
 }
 
-class _EditProfileSheet extends StatefulWidget {
+class _EditProfileSheet extends ConsumerStatefulWidget {
   const _EditProfileSheet({required this.profile});
 
   final MobileProfile profile;
 
   @override
-  State<_EditProfileSheet> createState() => _EditProfileSheetState();
+  ConsumerState<_EditProfileSheet> createState() => _EditProfileSheetState();
 }
 
-class _EditProfileSheetState extends State<_EditProfileSheet> {
+class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _email;
@@ -745,9 +741,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
     }
 
     setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
 
     try {
-      await AurexApiClient.updateProfile({
+      await ref.read(profileProvider.notifier).save({
         'full_name': _name.text.trim(),
         'email': _email.text.trim(),
         'phone': _phone.text.trim(),
@@ -766,15 +763,12 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
       });
 
       if (!mounted) return;
-      Navigator.of(context).pop(true);
-      ScaffoldMessenger.of(context).showSnackBar(
+      Navigator.of(context).pop();
+      messenger.showSnackBar(
         const SnackBar(content: Text('Profile updated successfully.')),
       );
     } on AurexApiException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -1045,7 +1039,7 @@ class _MenuField extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: DropdownButtonFormField<String>(
-        value: value,
+        initialValue: value,
         dropdownColor: _ProfileColors.panel,
         iconEnabledColor: _ProfileColors.softGold,
         style: const TextStyle(color: Colors.white),
@@ -1101,15 +1095,211 @@ class _ErrorState extends StatelessWidget {
   }
 }
 
-class _LogoutButton extends StatelessWidget {
-  const _LogoutButton();
+class _ChangePasswordSheet extends ConsumerStatefulWidget {
+  const _ChangePasswordSheet();
+
+  @override
+  ConsumerState<_ChangePasswordSheet> createState() =>
+      _ChangePasswordSheetState();
+}
+
+class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _current = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmation = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _current.dispose();
+    _password.dispose();
+    _confirmation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_formKey.currentState?.validate() != true) {
+      return;
+    }
+
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await ref
+          .read(apiClientProvider)
+          .changePassword(
+            currentPassword: _current.text,
+            password: _password.text,
+            confirmation: _confirmation.text,
+          );
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Password changed successfully.')),
+      );
+    } on AurexApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 18,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Change Password',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _PasswordField(controller: _current, label: 'Current Password'),
+              _PasswordField(
+                controller: _password,
+                label: 'New Password',
+                validator: (value) {
+                  final text = value ?? '';
+                  if (text.length < 8) return 'Use at least 8 characters';
+                  if (!RegExp(r'[a-z]').hasMatch(text) ||
+                      !RegExp(r'[A-Z]').hasMatch(text)) {
+                    return 'Use both upper and lower case letters';
+                  }
+                  if (!RegExp(r'\d').hasMatch(text)) {
+                    return 'Include at least one number';
+                  }
+                  return null;
+                },
+              ),
+              _PasswordField(
+                controller: _confirmation,
+                label: 'Confirm New Password',
+                validator: (value) =>
+                    value != _password.text ? 'Passwords do not match' : null,
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 58,
+                child: ElevatedButton(
+                  onPressed: _saving ? null : _save,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _ProfileColors.softGold,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: Text(
+                    _saving ? 'SAVING...' : 'CHANGE PASSWORD',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PasswordField extends StatelessWidget {
+  const _PasswordField({
+    required this.controller,
+    required this.label,
+    this.validator,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final FormFieldValidator<String>? validator;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: TextFormField(
+        controller: controller,
+        obscureText: true,
+        style: const TextStyle(color: Colors.white),
+        validator:
+            validator ??
+            (value) => (value ?? '').isEmpty ? '$label is required' : null,
+        decoration: _inputDecoration(label, null),
+      ),
+    );
+  }
+}
+
+class _LogoutButton extends ConsumerWidget {
+  const _LogoutButton();
+
+  Future<void> _logout(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: _ProfileColors.panel,
+        title: const Text('Log out?'),
+        content: const Text('You will need to sign in again to use AUREX.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Log Out',
+              style: TextStyle(color: Color(0xFFFF5A4F)),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      // The router sends the user back to the login screen.
+      await ref.read(sessionProvider.notifier).signOut();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     return SizedBox(
       height: 72,
       child: OutlinedButton.icon(
-        onPressed: () {},
+        onPressed: () => _logout(context, ref),
         style: OutlinedButton.styleFrom(
           foregroundColor: const Color(0xFFFF5A4F),
           side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),

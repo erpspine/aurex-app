@@ -1,30 +1,63 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
-import 'profile.dart';
-import 'workouts.dart';
+/// Hosts the five main tabs and keeps the floating navigation bar on top.
+class AurexShell extends StatelessWidget {
+  const AurexShell({super.key, required this.navigationShell});
+
+  final StatefulNavigationShell navigationShell;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF030303),
+      body: Stack(
+        children: [
+          navigationShell,
+          Positioned(
+            left: 10,
+            right: 10,
+            bottom: 12,
+            child: SafeArea(
+              top: false,
+              child: AurexBottomNavigation(
+                currentIndex: navigationShell.currentIndex,
+                onTap: (index) => navigationShell.goBranch(
+                  index,
+                  initialLocation: index == navigationShell.currentIndex,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class AurexBottomNavigation extends StatelessWidget {
   const AurexBottomNavigation({
     super.key,
-    this.currentIndex = 0,
-    this.homeIsRoot = false,
+    required this.currentIndex,
+    required this.onTap,
   });
 
   final int currentIndex;
-  final bool homeIsRoot;
+  final ValueChanged<int> onTap;
 
   static const _items = [
+    (Icons.home_rounded, 'Home'),
     (Icons.fitness_center_rounded, 'Workouts'),
+    (Icons.restaurant_rounded, 'Diet'),
+    (Icons.insights_rounded, 'Progress'),
     (Icons.person_rounded, 'Profile'),
   ];
-
-  int get _activeIndex => currentIndex == 4 ? 1 : 0;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 92,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
+      height: 84,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
         color: const Color(0xF20A0A0A),
         borderRadius: BorderRadius.circular(34),
@@ -34,63 +67,43 @@ class AurexBottomNavigation extends StatelessWidget {
         children: [
           for (var index = 0; index < _items.length; index++)
             Expanded(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(18),
-                onTap: () => _handleTap(context, index),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      _items[index].$1,
-                      color: index == _activeIndex
-                          ? _NavColors.softGold
-                          : Colors.white.withValues(alpha: 0.55),
-                      size: 30,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _items[index].$2,
-                      style: TextStyle(
-                        color: index == _activeIndex
+              child: Semantics(
+                selected: index == currentIndex,
+                button: true,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(18),
+                  onTap: () => onTap(index),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _items[index].$1,
+                        color: index == currentIndex
                             ? _NavColors.softGold
-                            : Colors.white.withValues(alpha: 0.6),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
+                            : Colors.white.withValues(alpha: 0.55),
+                        size: 27,
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 5),
+                      Text(
+                        _items[index].$2,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: index == currentIndex
+                              ? _NavColors.softGold
+                              : Colors.white.withValues(alpha: 0.6),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
         ],
       ),
     );
-  }
-
-  void _handleTap(BuildContext context, int index) {
-    if (index == 0) {
-      if (_activeIndex == 0) {
-        return;
-      }
-
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const WorkoutsPage()),
-        (route) => false,
-      );
-      return;
-    }
-
-    if (index == 1) {
-      if (_activeIndex == 1) {
-        return;
-      }
-
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ProfilePage()),
-        (route) => false,
-      );
-      return;
-    }
   }
 }
 

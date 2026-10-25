@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'api_client.dart';
-import 'bottom_nav.dart';
-import 'exercise_detail_list.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class ExerciseListPage extends StatefulWidget {
+class ExerciseListPage extends ConsumerStatefulWidget {
   const ExerciseListPage.bodyParts({super.key})
     : titlePrefix = 'Body Part',
       titleHighlight = 'Exercises',
@@ -125,10 +127,10 @@ class ExerciseListPage extends StatefulWidget {
   ];
 
   @override
-  State<ExerciseListPage> createState() => _ExerciseListPageState();
+  ConsumerState<ExerciseListPage> createState() => _ExerciseListPageState();
 }
 
-class _ExerciseListPageState extends State<ExerciseListPage> {
+class _ExerciseListPageState extends ConsumerState<ExerciseListPage> {
   static const _filters = [
     'All',
     'Beginner',
@@ -136,186 +138,161 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     'Advanced',
     'Elite',
   ];
+  final _search = TextEditingController();
   int _selectedFilter = 0;
-  bool _isLoading = true;
-  String? _error;
-  List<MobileExercise> _exercises = const [];
+
+  bool get _isBodyParts => widget.titlePrefix == 'Body Part';
 
   @override
   void initState() {
     super.initState();
-    _loadExercises();
+    _search.addListener(() => setState(() {}));
   }
 
-  Future<void> _loadExercises({bool forceRefresh = false}) async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-
-    try {
-      final exercises = await AurexApiClient.fetchExercises(
-        forceRefresh: forceRefresh,
-      );
-      if (!mounted) return;
-
-      setState(() {
-        _exercises = exercises
-            .where((exercise) => exercise.isPublishedMobile)
-            .toList();
-        _isLoading = false;
-      });
-    } on AurexApiException catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        _error = error.message;
-        _isLoading = false;
-      });
-    }
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
   }
 
-  List<_ExerciseCategory> get _items {
-    final filtered = _filteredExercises;
-    if (filtered.isEmpty && _isLoading) {
-      return widget._items;
-    }
-
-    if (widget.titlePrefix == 'Body Part') {
-      return _categoriesFromExercises(
-        fallbackItems: widget._items,
-        exercises: filtered
-            .where(
-              (exercise) =>
-                  exercise.category.toLowerCase().contains('body part'),
+  List<_ExerciseCategory> _items(List<MobileExercise>? exercises) {
+    final List<_ExerciseCategory> items;
+    if (exercises == null) {
+      items = widget._items;
+    } else {
+      final filtered = _filteredExercises(exercises);
+      items = _isBodyParts
+          ? _categoriesFromExercises(
+              fallbackItems: widget._items,
+              exercises: filtered
+                  .where((exercise) => exercise.bodyPart.isNotEmpty)
+                  .toList(),
+              groupType: 'Body Part',
+              groupValue: (exercise) => exercise.bodyPart,
             )
-            .toList(),
-        groupType: 'Body Part',
-        groupValue: (exercise) => exercise.bodyPart,
-      );
+          : _categoriesFromExercises(
+              fallbackItems: widget._items,
+              exercises: filtered
+                  .where((exercise) => exercise.equipment.isNotEmpty)
+                  .toList(),
+              groupType: 'Equipment',
+              groupValue: (exercise) => exercise.equipment,
+            );
     }
 
-    return _categoriesFromExercises(
-      fallbackItems: widget._items,
-      exercises: filtered
-          .where(
-            (exercise) => exercise.category.toLowerCase().contains('equipment'),
-          )
-          .toList(),
-      groupType: 'Equipment',
-      groupValue: (exercise) => exercise.equipment,
-    );
+    final query = _normalize(_search.text);
+    if (query.isEmpty) {
+      return items;
+    }
+
+    return items
+        .where((item) => _normalize(item.title).contains(query))
+        .toList();
   }
 
-  List<MobileExercise> get _filteredExercises {
+  List<MobileExercise> _filteredExercises(List<MobileExercise> exercises) {
     final selected = _filters[_selectedFilter];
     if (selected == 'All') {
-      return _exercises;
+      return exercises;
     }
 
-    return _exercises
-        .where(
-          (exercise) =>
-              _normalize(exercise.level) == _normalize(selected),
-        )
+    return exercises
+        .where((exercise) => _normalize(exercise.level) == _normalize(selected))
         .toList();
   }
 
   @override
   Widget build(BuildContext context) {
+    final exercisesAsync = ref.watch(exercisesProvider);
+    final items = _items(exercisesAsync.value);
+    final isLoading = exercisesAsync.isLoading;
+    final error = exercisesAsync.hasValue ? null : exercisesAsync.error;
+    Future<void> refresh() =>
+        ref.refresh(exercisesProvider.future).then((_) {}, onError: (_) {});
+
     return Scaffold(
       backgroundColor: _ListColors.black,
       body: SafeArea(
-        child: Stack(
-          children: [
-            RefreshIndicator(
-              color: _ListColors.gold,
-              backgroundColor: _ListColors.black,
-              onRefresh: () => _loadExercises(forceRefresh: true),
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 122),
-                children: [
-                  const _TopBar(),
-                  const SizedBox(height: 38),
-                  Text.rich(
+        child: RefreshIndicator(
+          color: _ListColors.gold,
+          backgroundColor: _ListColors.black,
+          onRefresh: refresh,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 122),
+            children: [
+              const _TopBar(),
+              const SizedBox(height: 38),
+              Text.rich(
+                TextSpan(
+                  text: '${widget.titlePrefix} ',
+                  children: [
                     TextSpan(
-                      text: '${widget.titlePrefix} ',
-                      children: [
-                        TextSpan(
-                          text: widget.titleHighlight,
-                          style: const TextStyle(color: _ListColors.gold),
-                        ),
-                      ],
+                      text: widget.titleHighlight,
+                      style: const TextStyle(color: _ListColors.gold),
                     ),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 32,
-                      fontWeight: FontWeight.w900,
-                      height: 1.1,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    widget.subtitle,
-                    style: const TextStyle(
-                      color: _ListColors.muted,
-                      fontSize: 17,
-                    ),
-                  ),
-                  const SizedBox(height: 30),
-                  _SearchField(hint: widget.searchHint),
-                  const SizedBox(height: 24),
-                  _FilterRow(
-                    filters: _filters,
-                    selectedIndex: _selectedFilter,
-                    onSelected: (index) {
-                      setState(() {
-                        _selectedFilter = index;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 34),
-                  Text(
-                    widget.sectionLabel,
-                    style: const TextStyle(
-                      color: _ListColors.muted,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.8,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_error != null)
-                    _InlineError(
-                      message: _error!,
-                      onRetry: () => _loadExercises(forceRefresh: true),
-                    )
-                  else ...[
-                    _CategoryGrid(items: _items),
-                    if (_isLoading) ...[
-                      const SizedBox(height: 12),
-                      const LinearProgressIndicator(
-                        color: _ListColors.gold,
-                        backgroundColor: Colors.transparent,
-                      ),
-                    ],
                   ],
-                  const SizedBox(height: 20),
-                  _HelpCard(
-                    title: widget.helpTitle,
-                    subtitle: widget.helpSubtitle,
+                ),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 32,
+                  fontWeight: FontWeight.w900,
+                  height: 1.1,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                widget.subtitle,
+                style: const TextStyle(color: _ListColors.muted, fontSize: 17),
+              ),
+              const SizedBox(height: 30),
+              _SearchField(hint: widget.searchHint, controller: _search),
+              const SizedBox(height: 24),
+              _FilterRow(
+                filters: _filters,
+                selectedIndex: _selectedFilter,
+                onSelected: (index) {
+                  setState(() {
+                    _selectedFilter = index;
+                  });
+                },
+              ),
+              const SizedBox(height: 34),
+              Text(
+                widget.sectionLabel,
+                style: const TextStyle(
+                  color: _ListColors.muted,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.8,
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (error != null)
+                _InlineError(message: error.toString(), onRetry: refresh)
+              else ...[
+                if (items.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Text(
+                      'Nothing matches your search.',
+                      style: TextStyle(color: _ListColors.muted),
+                    ),
+                  )
+                else
+                  _CategoryGrid(items: items),
+                if (isLoading) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(
+                    color: _ListColors.gold,
+                    backgroundColor: Colors.transparent,
                   ),
                 ],
-              ),
-            ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(),
-            ),
-          ],
+              ],
+              const SizedBox(height: 20),
+              _HelpCard(title: widget.helpTitle, subtitle: widget.helpSubtitle),
+            ],
+          ),
         ),
       ),
     );
@@ -330,7 +307,8 @@ class _TopBar extends StatelessWidget {
     return Row(
       children: [
         IconButton(
-          onPressed: () => Navigator.of(context).pop(),
+          tooltip: 'Back',
+          onPressed: () => popOrGo(context, AurexRoutes.home),
           icon: const Icon(Icons.arrow_back, color: Colors.white, size: 32),
         ),
         const Spacer(),
@@ -347,13 +325,15 @@ class _TopBar extends StatelessWidget {
 }
 
 class _SearchField extends StatelessWidget {
-  const _SearchField({required this.hint});
+  const _SearchField({required this.hint, required this.controller});
 
   final String hint;
+  final TextEditingController controller;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
+      controller: controller,
       style: const TextStyle(color: Colors.white),
       cursorColor: _ListColors.gold,
       decoration: InputDecoration(
@@ -462,18 +442,12 @@ class _CategoryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ExerciseDetailListPage(
-              groupType: item.groupType,
-              title: item.title.replaceAll('\n', ' '),
-              count: item.count,
-              image: item.image,
-            ),
-          ),
-        );
-      },
+      onTap: () => context.push(
+        AurexRoutes.exerciseGroup(
+          item.groupType,
+          item.title.replaceAll('\n', ' '),
+        ),
+      ),
       child: Container(
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
@@ -492,14 +466,8 @@ class _CategoryCard extends StatelessWidget {
                     top: 14,
                     child: CircleAvatar(
                       radius: 24,
-                      backgroundColor: _ListColors.gold.withValues(
-                        alpha: 0.18,
-                      ),
-                      child: Icon(
-                        item.icon,
-                        color: _ListColors.gold,
-                        size: 24,
-                      ),
+                      backgroundColor: _ListColors.gold.withValues(alpha: 0.18),
+                      child: Icon(item.icon, color: _ListColors.gold, size: 24),
                     ),
                   ),
                 ],
@@ -626,7 +594,8 @@ class _HelpCard extends StatelessWidget {
               ),
               SizedBox(width: compact ? 8 : 12),
               ElevatedButton(
-                onPressed: () {},
+                // Guided workout programs answer "what should I train?".
+                onPressed: () => context.go(AurexRoutes.workouts),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _ListColors.softGold,
                   foregroundColor: Colors.black,

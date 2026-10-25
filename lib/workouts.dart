@@ -1,17 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'api_client.dart';
-import 'bottom_nav.dart';
-import 'workout_plan_detail.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class WorkoutsPage extends StatefulWidget {
-  const WorkoutsPage({super.key});
+class WorkoutsPage extends ConsumerStatefulWidget {
+  const WorkoutsPage({super.key, this.initialLevel});
+
+  /// Level filter requested by the URL, e.g. from the home screen tiles.
+  final String? initialLevel;
 
   @override
-  State<WorkoutsPage> createState() => _WorkoutsPageState();
+  ConsumerState<WorkoutsPage> createState() => _WorkoutsPageState();
 }
 
-class _WorkoutsPageState extends State<WorkoutsPage> {
+class _WorkoutsPageState extends ConsumerState<WorkoutsPage> {
   static const _categories = [
     (Icons.grid_view_rounded, 'All'),
     (Icons.fitness_center_rounded, 'Strength'),
@@ -22,139 +27,279 @@ class _WorkoutsPageState extends State<WorkoutsPage> {
   ];
 
   static const _goals = [
-    (Icons.sports_gymnastics_rounded, 'Muscle Gain', 'Workouts'),
-    (Icons.fitness_center_rounded, 'Strength', 'Workouts'),
-    (Icons.local_fire_department_rounded, 'Weight Loss', 'Workouts'),
-    (Icons.directions_run_rounded, 'Athletic\nPerformance', 'Workouts'),
+    (Icons.sports_gymnastics_rounded, 'Muscle Gain'),
+    (Icons.fitness_center_rounded, 'Strength'),
+    (Icons.local_fire_department_rounded, 'Weight Loss'),
+    (Icons.directions_run_rounded, 'Athletic Performance'),
   ];
 
+  static const _defaultLevels = [
+    'Beginner',
+    'Intermediate',
+    'Advanced',
+    'Elite',
+  ];
+
+  final _search = TextEditingController();
   int _selectedCategory = 0;
-  bool _isLoading = true;
-  String? _error;
-  List<MobileWorkout> _workouts = const [];
+  String? _goal;
+  String? _level;
 
   @override
   void initState() {
     super.initState();
-    _loadWorkouts();
+    _level = widget.initialLevel;
+    _search.addListener(() => setState(() {}));
   }
 
-  Future<void> _loadWorkouts({bool forceRefresh = false}) async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-
-    try {
-      final workouts = await AurexApiClient.fetchWorkouts(
-        forceRefresh: forceRefresh,
-      );
-      if (!mounted) return;
-
-      setState(() {
-        _workouts = workouts;
-        _isLoading = false;
-      });
-    } on AurexApiException catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        _error = error.message;
-        _isLoading = false;
-      });
+  @override
+  void didUpdateWidget(covariant WorkoutsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialLevel != oldWidget.initialLevel) {
+      _level = widget.initialLevel;
     }
   }
 
-  List<MobileWorkout> get _filteredWorkouts {
-    if (_selectedCategory == 0) {
-      return _workouts;
-    }
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
-    final selected = _categories[_selectedCategory].$2.toLowerCase();
-    return _workouts.where((workout) {
-      final text = '${workout.goal} ${workout.type} ${workout.name}'
-          .toLowerCase();
-      return text.contains(selected);
+  List<MobileWorkout> _filter(List<MobileWorkout> workouts) {
+    final category = _selectedCategory == 0
+        ? null
+        : _categories[_selectedCategory].$2.toLowerCase();
+    final query = _search.text.trim().toLowerCase();
+
+    return workouts.where((workout) {
+      final text =
+          '${workout.name} ${workout.goal} ${workout.type} ${workout.level} '
+                  '${workout.description}'
+              .toLowerCase();
+
+      return (category == null || text.contains(category)) &&
+          (query.isEmpty || text.contains(query)) &&
+          (_goal == null || _same(workout.goal, _goal!)) &&
+          (_level == null || _same(workout.level, _level!));
     }).toList();
+  }
+
+  Future<void> _openFilter() async {
+    final levels = (ref.read(workoutLevelsProvider).value ?? const [])
+        .map((level) => level.name)
+        .toList();
+
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF141414),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => _LevelSheet(
+        levels: levels.isEmpty ? _defaultLevels : levels,
+        selected: _level,
+      ),
+    );
+
+    if (selected != null) {
+      setState(() => _level = selected.isEmpty ? null : selected);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final filteredWorkouts = _filteredWorkouts;
+    final workoutsAsync = ref.watch(workoutsProvider);
+    final workouts = workoutsAsync.value ?? const <MobileWorkout>[];
+    final filteredWorkouts = _filter(workouts);
+    // Errors are rendered by the sections below.
+    Future<void> retry() =>
+        ref.refresh(workoutsProvider.future).then((_) {}, onError: (_) {});
 
     return Scaffold(
       backgroundColor: _WorkoutColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
-          children: [
-            RefreshIndicator(
-              color: _WorkoutColors.gold,
-              backgroundColor: _WorkoutColors.black,
-              onRefresh: () => _loadWorkouts(forceRefresh: true),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(32, 52, 32, 126),
-                children: [
-                  const _TopBar(),
-                  const SizedBox(height: 22),
-                  const Text(
-                    'Workouts',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 40,
-                      fontWeight: FontWeight.w900,
+        child: RefreshIndicator(
+          color: _WorkoutColors.gold,
+          backgroundColor: _WorkoutColors.black,
+          onRefresh: retry,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(32, 52, 32, 126),
+            children: [
+              const _TopBar(),
+              const SizedBox(height: 22),
+              const Text(
+                'Workouts',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 40,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Train smart. Stay consistent. See results.',
+                style: TextStyle(color: _WorkoutColors.muted, fontSize: 19),
+              ),
+              const SizedBox(height: 26),
+              _SearchAndFilter(
+                controller: _search,
+                filterActive: _level != null,
+                onFilter: _openFilter,
+              ),
+              if (_level != null || _goal != null) ...[
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    if (_level != null)
+                      _ActiveFilterChip(
+                        label: _level!,
+                        onClear: () => setState(() => _level = null),
+                      ),
+                    if (_goal != null)
+                      _ActiveFilterChip(
+                        label: _goal!,
+                        onClear: () => setState(() => _goal = null),
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 24),
+              _CategoryTabs(
+                categories: _categories,
+                selectedIndex: _selectedCategory,
+                onSelected: (index) {
+                  setState(() {
+                    _selectedCategory = index;
+                  });
+                },
+              ),
+              const SizedBox(height: 34),
+              const _SectionHeader(title: 'WORKOUT PROGRAMS'),
+              const SizedBox(height: 16),
+              _WorkoutContentState(
+                isLoading: workoutsAsync.isLoading && !workoutsAsync.hasValue,
+                error: workoutsAsync.hasValue
+                    ? null
+                    : workoutsAsync.error?.toString(),
+                onRetry: retry,
+                child: _ProgramCarousel(workouts: workouts.take(6).toList()),
+              ),
+              const SizedBox(height: 36),
+              const _SectionHeader(title: 'WORKOUT BY GOAL'),
+              const SizedBox(height: 16),
+              _GoalGrid(
+                goals: [
+                  for (final goal in _goals)
+                    (
+                      goal.$1,
+                      goal.$2,
+                      workouts.where((w) => _same(w.goal, goal.$2)).length,
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  const Text(
-                    'Train smart. Stay consistent. See results.',
-                    style: TextStyle(color: _WorkoutColors.muted, fontSize: 19),
-                  ),
-                  const SizedBox(height: 26),
-                  const _SearchAndFilter(),
-                  const SizedBox(height: 24),
-                  _CategoryTabs(
-                    categories: _categories,
-                    selectedIndex: _selectedCategory,
-                    onSelected: (index) {
-                      setState(() {
-                        _selectedCategory = index;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 34),
-                  const _SectionHeader(title: 'WORKOUT PROGRAMS'),
-                  const SizedBox(height: 16),
-                  _WorkoutContentState(
-                    isLoading: _isLoading,
-                    error: _error,
-                    onRetry: () => _loadWorkouts(forceRefresh: true),
-                    child: _ProgramCarousel(
-                      workouts: _workouts.take(6).toList(),
-                    ),
-                  ),
-                  const SizedBox(height: 36),
-                  const _SectionHeader(title: 'WORKOUT BY GOAL'),
-                  const SizedBox(height: 16),
-                  const _GoalGrid(goals: _goals),
-                  const SizedBox(height: 36),
-                  const _SectionHeader(title: 'POPULAR WORKOUTS'),
-                  const SizedBox(height: 16),
-                  _WorkoutContentState(
-                    isLoading: _isLoading,
-                    error: _error,
-                    onRetry: () => _loadWorkouts(forceRefresh: true),
-                    child: _PopularWorkoutList(items: filteredWorkouts),
-                  ),
                 ],
+                selected: _goal,
+                onSelected: (goal) =>
+                    setState(() => _goal = _goal == goal ? null : goal),
+              ),
+              const SizedBox(height: 36),
+              _SectionHeader(
+                title: _goal == null && _level == null && _selectedCategory == 0
+                    ? 'ALL WORKOUTS'
+                    : 'MATCHING WORKOUTS',
+              ),
+              const SizedBox(height: 16),
+              _WorkoutContentState(
+                isLoading: workoutsAsync.isLoading && !workoutsAsync.hasValue,
+                error: workoutsAsync.hasValue
+                    ? null
+                    : workoutsAsync.error?.toString(),
+                onRetry: retry,
+                child: _PopularWorkoutList(items: filteredWorkouts),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+bool _same(String a, String b) =>
+    a.trim().toLowerCase() == b.trim().toLowerCase();
+
+class _TopBar extends StatelessWidget {
+  const _TopBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Image.asset(
+        'assets/images/placeholder.png',
+        width: 176,
+        fit: BoxFit.contain,
+      ),
+    );
+  }
+}
+
+class _ActiveFilterChip extends StatelessWidget {
+  const _ActiveFilterChip({required this.label, required this.onClear});
+
+  final String label;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return InputChip(
+      label: Text(label),
+      onDeleted: onClear,
+      labelStyle: const TextStyle(color: _WorkoutColors.softGold),
+      deleteIconColor: _WorkoutColors.softGold,
+      backgroundColor: Colors.white.withValues(alpha: 0.04),
+      side: const BorderSide(color: _WorkoutColors.gold),
+    );
+  }
+}
+
+class _LevelSheet extends StatelessWidget {
+  const _LevelSheet({required this.levels, required this.selected});
+
+  final List<String> levels;
+  final String? selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Filter by level',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
               ),
             ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 1),
-            ),
+            const SizedBox(height: 12),
+            for (final option in ['', ...levels])
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  option.isEmpty ? 'All levels' : option,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                trailing: (selected ?? '') == option
+                    ? const Icon(Icons.check, color: _WorkoutColors.softGold)
+                    : null,
+                onTap: () => Navigator.pop(context, option),
+              ),
           ],
         ),
       ),
@@ -162,52 +307,16 @@ class _WorkoutsPageState extends State<WorkoutsPage> {
   }
 }
 
-class _TopBar extends StatelessWidget {
-  const _TopBar();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Spacer(),
-        Image.asset(
-          'assets/images/placeholder.png',
-          width: 176,
-          fit: BoxFit.contain,
-        ),
-        const Spacer(),
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            IconButton(
-              onPressed: () {},
-              icon: const Icon(
-                Icons.notifications_none,
-                color: Colors.white,
-                size: 31,
-              ),
-            ),
-            Positioned(
-              right: 10,
-              top: 9,
-              child: Container(
-                width: 11,
-                height: 11,
-                decoration: const BoxDecoration(
-                  color: _WorkoutColors.softGold,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
 class _SearchAndFilter extends StatelessWidget {
-  const _SearchAndFilter();
+  const _SearchAndFilter({
+    required this.controller,
+    required this.filterActive,
+    required this.onFilter,
+  });
+
+  final TextEditingController controller;
+  final bool filterActive;
+  final VoidCallback onFilter;
 
   @override
   Widget build(BuildContext context) {
@@ -215,6 +324,7 @@ class _SearchAndFilter extends StatelessWidget {
       children: [
         Expanded(
           child: TextField(
+            controller: controller,
             style: const TextStyle(color: Colors.white),
             cursorColor: _WorkoutColors.gold,
             decoration: InputDecoration(
@@ -248,10 +358,14 @@ class _SearchAndFilter extends StatelessWidget {
         SizedBox(
           height: 64,
           child: OutlinedButton.icon(
-            onPressed: () {},
+            onPressed: onFilter,
             style: OutlinedButton.styleFrom(
               foregroundColor: _WorkoutColors.softGold,
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+              side: BorderSide(
+                color: filterActive
+                    ? _WorkoutColors.gold
+                    : Colors.white.withValues(alpha: 0.16),
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
@@ -342,33 +456,13 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 21,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ),
-        const Text(
-          'View All',
-          style: TextStyle(
-            color: _WorkoutColors.softGold,
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(width: 6),
-        const Icon(
-          Icons.chevron_right,
-          color: _WorkoutColors.softGold,
-          size: 25,
-        ),
-      ],
+    return Text(
+      title,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 21,
+        fontWeight: FontWeight.w900,
+      ),
     );
   }
 }
@@ -472,112 +566,112 @@ class _ProgramCarousel extends StatelessWidget {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(14),
                 child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _WorkoutImage(
-                    imageUrl: workout.coverImageUrl,
-                    asset: _fallbackImage(index),
-                  ),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withValues(alpha: 0.05),
-                          Colors.black.withValues(alpha: 0.82),
+                  fit: StackFit.expand,
+                  children: [
+                    _WorkoutImage(
+                      imageUrl: workout.coverImageUrl,
+                      asset: _fallbackImage(index),
+                    ),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.black.withValues(alpha: 0.05),
+                            Colors.black.withValues(alpha: 0.82),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (index == 0)
+                      Positioned(
+                        left: 14,
+                        top: 14,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _WorkoutColors.softGold,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'FEATURED',
+                            style: TextStyle(
+                              color: Colors.black,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ),
+                    Positioned(
+                      left: 18,
+                      right: 18,
+                      bottom: 18,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            workout.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 21,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${workout.goal} - ${workout.level}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Divider(color: Colors.white.withValues(alpha: 0.18)),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.format_list_bulleted,
+                                color: _WorkoutColors.muted,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                '${workout.exerciseCount} Exercises',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const Spacer(),
+                              const Icon(
+                                Icons.schedule,
+                                color: _WorkoutColors.muted,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                workout.duration,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
-                  ),
-                  if (index == 0)
-                    Positioned(
-                      left: 14,
-                      top: 14,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _WorkoutColors.softGold,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'FEATURED',
-                          style: TextStyle(
-                            color: Colors.black,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ),
-                  Positioned(
-                    left: 18,
-                    right: 18,
-                    bottom: 18,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          workout.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 21,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${workout.goal} - ${workout.level}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Divider(color: Colors.white.withValues(alpha: 0.18)),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            const Icon(
-                              Icons.format_list_bulleted,
-                              color: _WorkoutColors.muted,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${workout.exerciseCount} Exercises',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                              ),
-                            ),
-                            const Spacer(),
-                            const Icon(
-                              Icons.schedule,
-                              color: _WorkoutColors.muted,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              workout.duration,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                  ],
                 ),
               ),
             ),
@@ -589,9 +683,16 @@ class _ProgramCarousel extends StatelessWidget {
 }
 
 class _GoalGrid extends StatelessWidget {
-  const _GoalGrid({required this.goals});
+  const _GoalGrid({
+    required this.goals,
+    required this.selected,
+    required this.onSelected,
+  });
 
-  final List<(IconData, String, String)> goals;
+  /// Icon, goal name and number of workouts for it.
+  final List<(IconData, String, int)> goals;
+  final String? selected;
+  final ValueChanged<String> onSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -609,36 +710,42 @@ class _GoalGrid extends StatelessWidget {
               SizedBox(
                 width: width,
                 height: 188,
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: _cardDecoration(),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(goal.$1, color: _WorkoutColors.gold, size: 38),
-                      const SizedBox(height: 14),
-                      Text(
-                        goal.$2,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
+                child: InkWell(
+                  onTap: () => onSelected(goal.$2),
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: _cardDecoration(
+                      highlighted: selected == goal.$2,
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(goal.$1, color: _WorkoutColors.gold, size: 38),
+                        const SizedBox(height: 14),
+                        Text(
+                          goal.$2,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        goal.$3,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: _WorkoutColors.muted,
-                          fontSize: 14,
+                        const SizedBox(height: 8),
+                        Text(
+                          '${goal.$3} Workout${goal.$3 == 1 ? '' : 's'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _WorkoutColors.muted,
+                            fontSize: 14,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -657,7 +764,7 @@ class _PopularWorkoutList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return const _MessagePanel(message: 'No workouts match this category.');
+      return const _MessagePanel(message: 'No workouts match these filters.');
     }
 
     return Container(
@@ -688,74 +795,74 @@ class _PopularWorkoutRow extends StatelessWidget {
       onTap: () => _openWorkout(context, item),
       borderRadius: BorderRadius.circular(12),
       child: SizedBox(
-      height: 126,
-      child: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: SizedBox(
-              width: 172,
-              height: 112,
-              child: _WorkoutImage(
-                imageUrl: item.coverImageUrl,
-                asset: _fallbackImage(index),
+        height: 126,
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 172,
+                height: 112,
+                child: _WorkoutImage(
+                  imageUrl: item.coverImageUrl,
+                  asset: _fallbackImage(index),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 24),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  item.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  item.description.isEmpty ? item.goal : item.description,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _WorkoutColors.muted,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 14,
-                  runSpacing: 4,
-                  children: [
-                    _Meta(
-                      Icons.format_list_bulleted,
-                      '${item.exerciseCount} Exercises',
+            const SizedBox(width: 24),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    item.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
                     ),
-                    _Meta(Icons.schedule, item.duration),
-                    _Meta(
-                      Icons.bar_chart_rounded,
-                      item.level,
-                      color: _levelColor(item.level),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    item.description.isEmpty ? item.goal : item.description,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _WorkoutColors.muted,
+                      fontSize: 14,
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 4,
+                    children: [
+                      _Meta(
+                        Icons.format_list_bulleted,
+                        '${item.exerciseCount} Exercises',
+                      ),
+                      _Meta(Icons.schedule, item.duration),
+                      _Meta(
+                        Icons.bar_chart_rounded,
+                        item.level,
+                        color: _levelColor(item.level),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          const Icon(
-            Icons.chevron_right,
-            color: _WorkoutColors.softGold,
-            size: 36,
-          ),
-        ],
-      ),
+            const SizedBox(width: 10),
+            const Icon(
+              Icons.chevron_right,
+              color: _WorkoutColors.softGold,
+              size: 36,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -823,20 +930,21 @@ Color _levelColor(String level) {
       : _WorkoutColors.softGold;
 }
 
-BoxDecoration _cardDecoration() {
+BoxDecoration _cardDecoration({bool highlighted = false}) {
   return BoxDecoration(
     color: Colors.white.withValues(alpha: 0.035),
     borderRadius: BorderRadius.circular(14),
-    border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+    border: Border.all(
+      color: highlighted
+          ? _WorkoutColors.gold
+          : Colors.white.withValues(alpha: 0.14),
+      width: highlighted ? 1.4 : 1,
+    ),
   );
 }
 
 void _openWorkout(BuildContext context, MobileWorkout workout) {
-  Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => WorkoutPlanDetailPage(workout: workout),
-    ),
-  );
+  context.push(AurexRoutes.workout(workout.id));
 }
 
 class _WorkoutColors {

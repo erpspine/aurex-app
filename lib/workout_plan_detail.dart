@@ -1,127 +1,183 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'api_client.dart';
-import 'bottom_nav.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class WorkoutPlanDetailPage extends StatelessWidget {
-  const WorkoutPlanDetailPage({super.key, required this.workout});
+class WorkoutPlanDetailPage extends ConsumerWidget {
+  const WorkoutPlanDetailPage({super.key, required this.workoutId});
+
+  final String workoutId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workoutAsync = ref.watch(workoutByIdProvider(workoutId));
+
+    return Scaffold(
+      backgroundColor: _PlanColors.black,
+      body: SafeArea(
+        top: false,
+        child: switch (workoutAsync) {
+          AsyncData(value: final workout?) => _PlanBody(workout: workout),
+          AsyncData() => const _PlanMessage(
+            message: 'This workout is no longer available.',
+          ),
+          AsyncError(:final error) => _PlanMessage(
+            message: error.toString(),
+            onRetry: () => ref.invalidate(workoutsProvider),
+          ),
+          _ => const Center(
+            child: CircularProgressIndicator(color: _PlanColors.softGold),
+          ),
+        },
+      ),
+    );
+  }
+}
+
+class _PlanBody extends StatelessWidget {
+  const _PlanBody({required this.workout});
 
   final MobileWorkout workout;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _PlanColors.black,
-      body: SafeArea(
-        top: false,
-        child: Stack(
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(24, 34, 24, 124),
+      children: [
+        const _PlanTopBar(),
+        const SizedBox(height: 20),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(
+            height: 230,
+            child: workout.coverImageUrl.isEmpty
+                ? Image.asset(
+                    'assets/images/workouts_program_push.png',
+                    fit: BoxFit.cover,
+                  )
+                : Image.network(
+                    workout.coverImageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Image.asset(
+                      'assets/images/workouts_program_push.png',
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        Text(
+          workout.name,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 34,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          workout.description.isEmpty
+              ? '${workout.goal} • ${workout.level}'
+              : workout.description,
+          style: const TextStyle(
+            color: _PlanColors.muted,
+            fontSize: 16,
+            height: 1.4,
+          ),
+        ),
+        const SizedBox(height: 18),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
           children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(24, 34, 24, 124),
-              children: [
-                Row(
-                  children: [
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(
-                        Icons.arrow_back,
-                        color: Colors.white,
-                        size: 30,
-                      ),
-                    ),
-                    const Spacer(),
-                    Image.asset(
-                      'assets/images/placeholder.png',
-                      width: 156,
-                      fit: BoxFit.contain,
-                    ),
-                    const Spacer(),
-                    const SizedBox(width: 48),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: SizedBox(
-                    height: 230,
-                    child: workout.coverImageUrl.isEmpty
-                        ? Image.asset(
-                            'assets/images/workouts_program_push.png',
-                            fit: BoxFit.cover,
-                          )
-                        : Image.network(
-                            workout.coverImageUrl,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) =>
-                                Image.asset(
-                              'assets/images/workouts_program_push.png',
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  workout.name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 34,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  workout.description.isEmpty
-                      ? '${workout.goal} • ${workout.level}'
-                      : workout.description,
-                  style: const TextStyle(
-                    color: _PlanColors.muted,
-                    fontSize: 16,
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    _Pill(Icons.calendar_month, '${workout.dayCount} Days'),
-                    _Pill(
-                      Icons.format_list_bulleted,
-                      '${workout.exerciseCount} Exercises',
-                    ),
-                    _Pill(Icons.schedule, workout.duration),
-                    _Pill(Icons.bar_chart, workout.level, highlighted: true),
-                  ],
-                ),
-                const SizedBox(height: 30),
-                const Text(
-                  'WORKOUT PLAN',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                if (workout.workoutDays.isEmpty)
-                  const _EmptyPlan()
-                else
-                  for (final day in workout.workoutDays) ...[
-                    _DayCard(day: day),
-                    const SizedBox(height: 16),
-                  ],
-              ],
+            _Pill(Icons.calendar_month, '${workout.dayCount} Days'),
+            _Pill(
+              Icons.format_list_bulleted,
+              '${workout.exerciseCount} Exercises',
             ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 1),
-            ),
+            _Pill(Icons.schedule, workout.duration),
+            _Pill(Icons.bar_chart, workout.level, highlighted: true),
           ],
         ),
-      ),
+        const SizedBox(height: 30),
+        const Text(
+          'WORKOUT PLAN',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (workout.workoutDays.isEmpty)
+          const _EmptyPlan()
+        else
+          for (final day in workout.workoutDays) ...[
+            _DayCard(day: day),
+            const SizedBox(height: 16),
+          ],
+      ],
+    );
+  }
+}
+
+class _PlanTopBar extends StatelessWidget {
+  const _PlanTopBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        IconButton(
+          tooltip: 'Back',
+          onPressed: () => popOrGo(context, AurexRoutes.workouts),
+          icon: const Icon(Icons.arrow_back, color: Colors.white, size: 30),
+        ),
+        const Spacer(),
+        Image.asset(
+          'assets/images/placeholder.png',
+          width: 156,
+          fit: BoxFit.contain,
+        ),
+        const Spacer(),
+        const SizedBox(width: 48),
+      ],
+    );
+  }
+}
+
+class _PlanMessage extends StatelessWidget {
+  const _PlanMessage({required this.message, this.onRetry});
+
+  final String message;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(24, 34, 24, 124),
+      children: [
+        const _PlanTopBar(),
+        const SizedBox(height: 60),
+        Text(
+          message,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: _PlanColors.muted, fontSize: 16),
+        ),
+        if (onRetry != null)
+          Center(
+            child: TextButton(
+              onPressed: onRetry,
+              child: const Text(
+                'Retry',
+                style: TextStyle(color: _PlanColors.softGold),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -197,10 +253,7 @@ class _DayCard extends StatelessWidget {
             )
           else
             for (var index = 0; index < day.exercises.length; index++) ...[
-              _ExerciseRow(
-                number: index + 1,
-                exercise: day.exercises[index],
-              ),
+              _ExerciseRow(number: index + 1, exercise: day.exercises[index]),
               if (index < day.exercises.length - 1)
                 Divider(color: Colors.white.withValues(alpha: 0.1)),
             ],
@@ -219,47 +272,59 @@ class _ExerciseRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = _text(exercise['name'], fallback: 'Exercise');
-    final bodyPart = _text(exercise['body_part'], fallback: 'Body part not set');
+    final bodyPart = _text(
+      exercise['body_part'],
+      fallback: 'Body part not set',
+    );
     final sets = _text(exercise['sets'], fallback: '-');
     final reps = _text(exercise['reps'], fallback: '-');
     final rest = _text(exercise['rest'], fallback: '-');
+    final exerciseId = _text(exercise['exercise_id']);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          Text(
-            '$number.',
-            style: const TextStyle(
-              color: _PlanColors.softGold,
-              fontWeight: FontWeight.w900,
+    return InkWell(
+      onTap: exerciseId.isEmpty
+          ? null
+          : () => context.push(AurexRoutes.exercise(exerciseId)),
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Text(
+              '$number.',
+              style: const TextStyle(
+                color: _PlanColors.softGold,
+                fontWeight: FontWeight.w900,
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  '$bodyPart • $sets sets • $reps reps • Rest $rest',
-                  style: const TextStyle(
-                    color: _PlanColors.muted,
-                    fontSize: 13,
+                  const SizedBox(height: 5),
+                  Text(
+                    '$bodyPart • $sets sets • $reps reps • Rest $rest',
+                    style: const TextStyle(
+                      color: _PlanColors.muted,
+                      fontSize: 13,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+            if (exerciseId.isNotEmpty)
+              const Icon(Icons.chevron_right, color: _PlanColors.softGold),
+          ],
+        ),
       ),
     );
   }

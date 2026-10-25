@@ -1,46 +1,195 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'bottom_nav.dart';
+import 'activity.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class ProgressPage extends StatelessWidget {
+/// Monthly training summary built from the member profile and the workout
+/// sessions completed in the app.
+class ProgressPage extends ConsumerWidget {
   const ProgressPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(profileProvider).value;
+    final historyAsync = ref.watch(workoutHistoryProvider);
+    final history = historyAsync.value ?? const <WorkoutLogEntry>[];
+    final stats = _ProgressStats.from(history, DateTime.now());
+
+    Future<void> refresh() async {
+      // Each section shows its own state, so failures are ignored here.
+      Future<void> settle(Future<Object?> future) =>
+          future.then((_) {}, onError: (_) {});
+
+      await Future.wait([
+        settle(ref.refresh(profileProvider.future)),
+        settle(ref.refresh(workoutHistoryProvider.future)),
+      ]);
+    }
+
     return Scaffold(
       backgroundColor: _ProfileColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
-          children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(28, 48, 28, 126),
-              children: const [
-                _TopBar(),
-                SizedBox(height: 22),
-                _ProfileHeader(),
-                SizedBox(height: 24),
-                _UserMetaRow(),
-                SizedBox(height: 26),
-                _ProgressOverview(),
-                SizedBox(height: 14),
-                _BodyStats(),
-                SizedBox(height: 14),
-                _RecentWorkouts(),
-                SizedBox(height: 14),
-                _Achievements(),
+        child: RefreshIndicator(
+          color: _ProfileColors.gold,
+          onRefresh: refresh,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(28, 48, 28, 126),
+            children: [
+              const _TopBar(),
+              const SizedBox(height: 10),
+              _ProfileHeader(profile: profile),
+              const SizedBox(height: 24),
+              if (profile != null) ...[
+                _UserMetaRow(profile: profile),
+                const SizedBox(height: 26),
               ],
-            ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 2),
-            ),
-          ],
+              if (historyAsync.hasError && !historyAsync.hasValue) ...[
+                _Panel(
+                  child: Row(
+                    children: [
+                      const Icon(Icons.cloud_off, color: _ProfileColors.gold),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Could not load your workout history. '
+                          '${historyAsync.error}',
+                          style: const TextStyle(color: _ProfileColors.muted),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => ref.invalidate(workoutHistoryProvider),
+                        child: const Text(
+                          'Retry',
+                          style: TextStyle(color: _ProfileColors.softGold),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ] else if (!historyAsync.hasValue) ...[
+                const LinearProgressIndicator(color: _ProfileColors.gold),
+                const SizedBox(height: 14),
+              ] else if (history.isEmpty) ...[
+                const _GetStartedCard(),
+                const SizedBox(height: 14),
+              ],
+              _ProgressOverview(stats: stats),
+              const SizedBox(height: 14),
+              if (profile != null) ...[
+                _BodyStats(profile: profile),
+                const SizedBox(height: 14),
+              ],
+              if (history.isNotEmpty) ...[
+                _RecentWorkouts(entries: history.take(5).toList()),
+                const SizedBox(height: 14),
+              ],
+              _Achievements(stats: stats),
+            ],
+          ),
         ),
       ),
     );
+  }
+}
+
+class _ProgressStats {
+  const _ProgressStats({
+    required this.monthWorkouts,
+    required this.lastMonthWorkouts,
+    required this.monthSeconds,
+    required this.lastMonthSeconds,
+    required this.monthSets,
+    required this.totalWorkouts,
+    required this.streak,
+    required this.bestStreakDays,
+    required this.dailyMinutes,
+    required this.topBodyPart,
+    required this.topBodyPartCount,
+  });
+
+  final int monthWorkouts;
+  final int lastMonthWorkouts;
+  final int monthSeconds;
+  final int lastMonthSeconds;
+  final int monthSets;
+  final int totalWorkouts;
+  final int streak;
+  final int bestStreakDays;
+
+  /// Minutes trained on each of the last seven days, oldest first.
+  final List<(DateTime, double)> dailyMinutes;
+  final String topBodyPart;
+  final int topBodyPartCount;
+
+  factory _ProgressStats.from(List<WorkoutLogEntry> history, DateTime now) {
+    bool inMonth(DateTime date, int year, int month) =>
+        date.year == year && date.month == month;
+
+    final lastMonth = DateTime(now.year, now.month - 1);
+    final thisMonth = history
+        .where((e) => inMonth(e.completedAt, now.year, now.month))
+        .toList();
+    final previous = history
+        .where((e) => inMonth(e.completedAt, lastMonth.year, lastMonth.month))
+        .toList();
+
+    final today = dateOnly(now);
+    final dailyMinutes = [
+      for (var offset = 6; offset >= 0; offset--)
+        () {
+          final day = today.subtract(Duration(days: offset));
+          final seconds = history
+              .where((e) => dateKey(e.completedAt) == dateKey(day))
+              .fold<int>(0, (sum, e) => sum + e.durationSeconds);
+          return (day, seconds / 60);
+        }(),
+    ];
+
+    final bodyParts = <String, int>{};
+    for (final entry in thisMonth.isEmpty ? history : thisMonth) {
+      if (entry.bodyPart.isNotEmpty) {
+        bodyParts.update(entry.bodyPart, (n) => n + 1, ifAbsent: () => 1);
+      }
+    }
+    final top = bodyParts.entries.isEmpty
+        ? null
+        : bodyParts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+
+    return _ProgressStats(
+      monthWorkouts: thisMonth.length,
+      lastMonthWorkouts: previous.length,
+      monthSeconds: thisMonth.fold(0, (sum, e) => sum + e.durationSeconds),
+      lastMonthSeconds: previous.fold(0, (sum, e) => sum + e.durationSeconds),
+      monthSets: thisMonth.fold(0, (sum, e) => sum + e.sets.length),
+      totalWorkouts: history.length,
+      streak: workoutStreak(history, now),
+      bestStreakDays: _bestStreak(history),
+      dailyMinutes: dailyMinutes,
+      topBodyPart: top?.key ?? '',
+      topBodyPartCount: top?.value ?? 0,
+    );
+  }
+
+  static int _bestStreak(List<WorkoutLogEntry> history) {
+    final days = history.map((e) => dateOnly(e.completedAt)).toSet().toList()
+      ..sort();
+    var best = 0;
+    var run = 0;
+    DateTime? previous;
+    for (final day in days) {
+      run = previous != null && day.difference(previous).inDays == 1
+          ? run + 1
+          : 1;
+      best = run > best ? run : best;
+      previous = day;
+    }
+    return best;
   }
 }
 
@@ -53,15 +202,8 @@ class _TopBar extends StatelessWidget {
       children: [
         const Spacer(),
         IconButton(
-          onPressed: () {},
-          icon: const Icon(
-            Icons.notifications_none,
-            color: Colors.white,
-            size: 31,
-          ),
-        ),
-        IconButton(
-          onPressed: () {},
+          tooltip: 'Profile settings',
+          onPressed: () => context.go(AurexRoutes.profile),
           icon: const Icon(Icons.settings, color: Colors.white, size: 29),
         ),
       ],
@@ -70,10 +212,14 @@ class _TopBar extends StatelessWidget {
 }
 
 class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader();
+  const _ProfileHeader({required this.profile});
+
+  final MobileProfile? profile;
 
   @override
   Widget build(BuildContext context) {
+    final photoUrl = profile?.profilePhotoUrl ?? '';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -98,98 +244,78 @@ class _ProfileHeader extends StatelessWidget {
           'Track your progress and stay consistent.',
           style: TextStyle(color: _ProfileColors.muted, fontSize: 17),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 18),
         Row(
           children: [
-            Stack(
-              children: [
-                Container(
-                  width: 150,
-                  height: 150,
-                  padding: const EdgeInsets.all(3),
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _ProfileColors.gold,
-                  ),
-                  child: ClipOval(
-                    child: Image.asset(
-                      'assets/images/profile_avatar.png',
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          child: const Icon(
-                            Icons.person,
-                            color: _ProfileColors.gold,
-                            size: 80,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                Positioned(
-                  right: 0,
-                  bottom: 8,
-                  child: CircleAvatar(
-                    radius: 22,
-                    backgroundColor: _ProfileColors.softGold,
-                    child: IconButton(
-                      onPressed: () {},
-                      icon: const Icon(
-                        Icons.edit,
-                        color: Colors.black,
-                        size: 19,
+            Container(
+              width: 116,
+              height: 116,
+              padding: const EdgeInsets.all(3),
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: _ProfileColors.gold,
+              ),
+              child: ClipOval(
+                child: photoUrl.isEmpty
+                    ? const _AvatarFallback()
+                    : Image.network(
+                        photoUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const _AvatarFallback(),
                       ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(width: 38),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'John Doe',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 32,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 11,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.18),
+            const SizedBox(width: 26),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    profile?.fullName ?? 'Loading...',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.bar_chart_rounded,
-                        color: _ProfileColors.gold,
-                        size: 23,
+                  if (profile != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
                       ),
-                      SizedBox(width: 9),
-                      Text(
-                        'Intermediate',
-                        style: TextStyle(
-                          color: _ProfileColors.softGold,
-                          fontSize: 16,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.18),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.bar_chart_rounded,
+                            color: _ProfileColors.gold,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            profile!.workoutLevel,
+                            style: const TextStyle(
+                              color: _ProfileColors.softGold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
@@ -198,16 +324,30 @@ class _ProfileHeader extends StatelessWidget {
   }
 }
 
-class _UserMetaRow extends StatelessWidget {
-  const _UserMetaRow();
+class _AvatarFallback extends StatelessWidget {
+  const _AvatarFallback();
 
   @override
   Widget build(BuildContext context) {
-    const items = [
-      (Icons.calendar_month, 'Member Since', 'Jan 2024'),
-      (Icons.accessibility_new_rounded, 'Height', '178 cm'),
-      (Icons.work_rounded, 'Weight', '72 kg'),
-      (Icons.track_changes_rounded, 'Goal', 'Muscle Gain'),
+    return Container(
+      color: Colors.white.withValues(alpha: 0.08),
+      child: const Icon(Icons.person, color: _ProfileColors.gold, size: 64),
+    );
+  }
+}
+
+class _UserMetaRow extends StatelessWidget {
+  const _UserMetaRow({required this.profile});
+
+  final MobileProfile profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [
+      (Icons.calendar_month, 'Member Since', _monthYear(profile.memberSince)),
+      (Icons.height, 'Height', _unit(profile.heightCm, 'cm')),
+      (Icons.monitor_weight_outlined, 'Weight', _unit(profile.weightKg, 'kg')),
+      (Icons.track_changes_rounded, 'Goal', profile.fitnessGoal),
     ];
 
     return LayoutBuilder(
@@ -262,8 +402,46 @@ class _UserMetaRow extends StatelessWidget {
   }
 }
 
+class _GetStartedCard extends StatelessWidget {
+  const _GetStartedCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return _Panel(
+      child: Row(
+        children: [
+          const Icon(
+            Icons.play_circle_outline,
+            color: _ProfileColors.softGold,
+            size: 44,
+          ),
+          const SizedBox(width: 16),
+          const Expanded(
+            child: Text(
+              'Finish a workout session and save it to start tracking your '
+              'progress here.',
+              style: TextStyle(color: Colors.white, fontSize: 15, height: 1.4),
+            ),
+          ),
+          const SizedBox(width: 12),
+          ElevatedButton(
+            onPressed: () => context.go(AurexRoutes.home),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _ProfileColors.softGold,
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('Train'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ProgressOverview extends StatelessWidget {
-  const _ProgressOverview();
+  const _ProgressOverview({required this.stats});
+
+  final _ProgressStats stats;
 
   @override
   Widget build(BuildContext context) {
@@ -273,7 +451,7 @@ class _ProgressOverview extends StatelessWidget {
         children: [
           const _PanelHeader(title: 'PROGRESS OVERVIEW', action: 'This Month'),
           const SizedBox(height: 16),
-          const SingleChildScrollView(
+          SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
@@ -282,98 +460,128 @@ class _ProgressOverview extends StatelessWidget {
                   child: _MetricCard(
                     icon: Icons.fitness_center,
                     title: 'Workouts',
-                    value: '18',
+                    value: '${stats.monthWorkouts}',
                     subtitle: 'Completed',
-                    change: '20%',
+                    change: _change(
+                      stats.monthWorkouts,
+                      stats.lastMonthWorkouts,
+                    ),
                   ),
                 ),
+                const SizedBox(width: 10),
                 SizedBox(
                   width: 176,
                   child: _MetricCard(
                     icon: Icons.schedule,
                     title: 'Workout Time',
-                    value: '12h 45m',
+                    value: _duration(stats.monthSeconds),
                     subtitle: 'Total',
-                    change: '15%',
+                    change: _change(stats.monthSeconds, stats.lastMonthSeconds),
                   ),
                 ),
+                const SizedBox(width: 10),
                 SizedBox(
                   width: 176,
                   child: _MetricCard(
-                    icon: Icons.local_fire_department,
-                    title: 'Calories Burned',
-                    value: '5,642',
-                    subtitle: 'Total kcal',
-                    change: '18%',
+                    icon: Icons.view_comfy_alt_rounded,
+                    title: 'Sets',
+                    value: '${stats.monthSets}',
+                    subtitle: 'Completed',
                   ),
                 ),
+                const SizedBox(width: 10),
                 SizedBox(
                   width: 176,
                   child: _MetricCard(
                     icon: Icons.flash_on,
                     title: 'Streak',
-                    value: '12',
-                    subtitle: 'Days',
-                    change: '9%',
+                    value: '${stats.streak}',
+                    subtitle: stats.streak == 1 ? 'Day' : 'Days',
                   ),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              const Expanded(flex: 3, child: _ChartCard()),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Container(
-                  height: 278,
-                  padding: const EdgeInsets.all(18),
-                  decoration: _innerDecoration(),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Top Body Part',
-                        style: TextStyle(
-                          color: _ProfileColors.muted,
-                          fontSize: 15,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Shoulders',
-                        style: TextStyle(
-                          color: _ProfileColors.softGold,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'Trained 6 times',
-                        style: TextStyle(color: Colors.white, fontSize: 14),
-                      ),
-                      const Spacer(),
-                      Center(
-                        child: Image.asset(
-                          'assets/images/profile_body_part.png',
-                          height: 142,
-                          fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) {
-                            return const Icon(
-                              Icons.accessibility_new_rounded,
-                              color: _ProfileColors.gold,
-                              size: 96,
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final chart = _ChartCard(dailyMinutes: stats.dailyMinutes);
+              final topPart = _TopBodyPart(
+                name: stats.topBodyPart,
+                count: stats.topBodyPartCount,
+              );
+
+              if (constraints.maxWidth < 520) {
+                return Column(
+                  children: [chart, const SizedBox(height: 10), topPart],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(flex: 3, child: chart),
+                  const SizedBox(width: 10),
+                  Expanded(child: topPart),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TopBodyPart extends StatelessWidget {
+  const _TopBodyPart({required this.name, required this.count});
+
+  final String name;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 278,
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: _innerDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Top Body Part',
+            style: TextStyle(color: _ProfileColors.muted, fontSize: 15),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            name.isEmpty ? 'None yet' : name,
+            style: const TextStyle(
+              color: _ProfileColors.softGold,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            count == 0
+                ? 'Start training to see it'
+                : 'Trained $count time${count == 1 ? '' : 's'}',
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const Spacer(),
+          Center(
+            child: Image.asset(
+              'assets/images/profile_body_part.png',
+              height: 142,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Icon(
+                  Icons.accessibility_new_rounded,
+                  color: _ProfileColors.gold,
+                  size: 96,
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -382,21 +590,48 @@ class _ProgressOverview extends StatelessWidget {
 }
 
 class _BodyStats extends StatelessWidget {
-  const _BodyStats();
+  const _BodyStats({required this.profile});
+
+  final MobileProfile profile;
 
   @override
   Widget build(BuildContext context) {
-    const items = [
-      (Icons.work_rounded, 'Weight', '72 kg', '▼ 1.5 kg'),
-      (Icons.groups_rounded, 'Body Fat', '14 %', '▼ 2%'),
-      (Icons.fitness_center_rounded, 'Muscle Mass', '31.2 kg', '▲ 1.8 kg'),
-      (Icons.radar_rounded, 'BMI', '22.7', 'Normal'),
+    final bmi = profile.bmi;
+    final days = profile.daysBeforeExpiry;
+    final items = [
+      (
+        Icons.monitor_weight_outlined,
+        'Weight',
+        _unit(profile.weightKg, 'kg'),
+        '',
+      ),
+      (Icons.height, 'Height', _unit(profile.heightCm, 'cm'), ''),
+      (
+        Icons.radar_rounded,
+        'BMI',
+        bmi == null ? 'Not set' : bmi.toStringAsFixed(1),
+        bmi == null ? 'Add height & weight' : _bmiCategory(bmi),
+      ),
+      (
+        Icons.card_membership,
+        'Membership',
+        profile.membershipStatus.isEmpty ? 'Not set' : profile.membershipStatus,
+        days == null
+            ? ''
+            : days < 0
+            ? 'Expired'
+            : '$days day${days == 1 ? '' : 's'} left',
+      ),
     ];
 
     return _Panel(
       child: Column(
         children: [
-          const _PanelHeader(title: 'BODY STATS', action: 'View All'),
+          _PanelHeader(
+            title: 'BODY STATS',
+            action: 'Update',
+            onTap: () => context.go(AurexRoutes.profile),
+          ),
           const SizedBox(height: 18),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -414,14 +649,14 @@ class _BodyStats extends StatelessWidget {
                       child: Row(
                         children: [
                           CircleAvatar(
-                            radius: 28,
+                            radius: 26,
                             backgroundColor: _ProfileColors.gold.withValues(
                               alpha: 0.13,
                             ),
                             child: Icon(
                               item.$1,
                               color: _ProfileColors.gold,
-                              size: 28,
+                              size: 26,
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -443,19 +678,21 @@ class _BodyStats extends StatelessWidget {
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                     color: Colors.white,
-                                    fontSize: 20,
+                                    fontSize: 19,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  item.$4,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.lightGreenAccent,
-                                    fontSize: 13,
+                                if (item.$4.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    item.$4,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.lightGreenAccent,
+                                      fontSize: 13,
+                                    ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           ),
@@ -473,129 +710,82 @@ class _BodyStats extends StatelessWidget {
 }
 
 class _RecentWorkouts extends StatelessWidget {
-  const _RecentWorkouts();
+  const _RecentWorkouts({required this.entries});
+
+  final List<WorkoutLogEntry> entries;
 
   @override
   Widget build(BuildContext context) {
-    const rows = [
-      (
-        'Shoulder Press Machine',
-        'Shoulders',
-        'May 30, 2024',
-        '4 Sets • 10 Reps • 30 kg',
-        'assets/images/profile_recent_1.png',
-      ),
-      (
-        'Lat Pulldown Machine',
-        'Back',
-        'May 29, 2024',
-        '4 Sets • 12 Reps • 40 kg',
-        'assets/images/profile_recent_2.png',
-      ),
-      (
-        'Dumbbell Bench Press',
-        'Chest',
-        'May 28, 2024',
-        '4 Sets • 10 Reps • 25 kg',
-        'assets/images/profile_recent_3.png',
-      ),
-    ];
-
     return _Panel(
       child: Column(
         children: [
-          const _PanelHeader(title: 'RECENT WORKOUTS', action: 'View All ›'),
+          const _PanelHeader(title: 'RECENT WORKOUTS'),
           const SizedBox(height: 14),
-          for (final row in rows)
-            Container(
-              constraints: const BoxConstraints(minHeight: 92),
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(8),
-              decoration: _innerDecoration(),
-              child: Row(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.asset(
-                      row.$5,
-                      width: 110,
-                      height: 68,
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          width: 110,
-                          height: 68,
-                          color: Colors.white.withValues(alpha: 0.06),
-                          child: const Icon(
-                            Icons.fitness_center,
-                            color: _ProfileColors.gold,
-                          ),
-                        );
-                      },
+          for (final entry in entries)
+            InkWell(
+              onTap: entry.exerciseId.isEmpty
+                  ? null
+                  : () => context.push(AurexRoutes.exercise(entry.exerciseId)),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 80),
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: _innerDecoration(),
+                child: Row(
+                  children: [
+                    const CircleAvatar(
+                      radius: 24,
+                      backgroundColor: Color(0x22CBA436),
+                      child: Icon(
+                        Icons.fitness_center,
+                        color: _ProfileColors.gold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 18),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          row.$1,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            entry.exerciseName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          row.$2,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: _ProfileColors.muted,
-                            fontSize: 13,
+                          const SizedBox(height: 6),
+                          Text(
+                            [
+                              if (entry.bodyPart.isNotEmpty) entry.bodyPart,
+                              '${entry.sets.length} Sets',
+                              if (entry.topWeightKg > 0)
+                                '${_trim(entry.topWeightKg)} kg',
+                              _duration(entry.durationSeconds),
+                            ].join(' • '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _ProfileColors.muted,
+                              fontSize: 13,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  Flexible(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          row.$3,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: _ProfileColors.muted,
-                            fontSize: 15,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          row.$4,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: _ProfileColors.muted,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
+                    const SizedBox(width: 10),
+                    Text(
+                      _shortDate(entry.completedAt),
+                      style: const TextStyle(
+                        color: _ProfileColors.muted,
+                        fontSize: 13,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 14),
-                  const Icon(
-                    Icons.chevron_right,
-                    color: _ProfileColors.softGold,
-                    size: 30,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
         ],
@@ -605,22 +795,28 @@ class _RecentWorkouts extends StatelessWidget {
 }
 
 class _Achievements extends StatelessWidget {
-  const _Achievements();
+  const _Achievements({required this.stats});
+
+  final _ProgressStats stats;
 
   @override
   Widget build(BuildContext context) {
-    const items = [
-      (Icons.local_fire_department, '7 Day Streak', '7'),
-      (Icons.fitness_center, '10 Workouts', '10'),
-      (Icons.emoji_events, 'First Milestone', ''),
-      (Icons.track_changes, 'Consistency', ''),
-      (Icons.sports_gymnastics, 'Strong Start', ''),
+    final items = [
+      (Icons.emoji_events, 'First Workout', stats.totalWorkouts >= 1),
+      (Icons.fitness_center, '10 Workouts', stats.totalWorkouts >= 10),
+      (Icons.local_fire_department, '7 Day Streak', stats.bestStreakDays >= 7),
+      (Icons.military_tech, '25 Workouts', stats.totalWorkouts >= 25),
+      (Icons.workspace_premium, '50 Workouts', stats.totalWorkouts >= 50),
     ];
 
     return _Panel(
       child: Column(
         children: [
-          const _PanelHeader(title: 'ACHIEVEMENTS', action: 'View All ›'),
+          _PanelHeader(
+            title: 'ACHIEVEMENTS',
+            action:
+                '${items.where((item) => item.$3).length} / ${items.length}',
+          ),
           const SizedBox(height: 18),
           SizedBox(
             height: 116,
@@ -635,58 +831,43 @@ class _Achievements extends StatelessWidget {
               ),
               itemBuilder: (context, index) {
                 final item = items[index];
+                final color = item.$3 ? _ProfileColors.gold : Colors.white24;
 
-                return SizedBox(
-                  width: 104,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 68,
-                        height: 68,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: _ProfileColors.gold),
-                          borderRadius: BorderRadius.circular(18),
+                return Semantics(
+                  label: '${item.$2}, ${item.$3 ? 'unlocked' : 'locked'}',
+                  child: SizedBox(
+                    width: 104,
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 68,
+                          height: 68,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: color),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Icon(
+                            item.$3 ? item.$1 : Icons.lock_outline,
+                            color: color,
+                            size: 28,
+                          ),
                         ),
-                        child: item.$3.isEmpty
-                            ? Icon(
-                                item.$1,
-                                color: _ProfileColors.gold,
-                                size: 28,
-                              )
-                            : Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    item.$1,
-                                    color: _ProfileColors.gold,
-                                    size: 24,
-                                  ),
-                                  Text(
-                                    item.$3,
-                                    style: const TextStyle(
-                                      color: _ProfileColors.gold,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        item.$2,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          height: 1.15,
+                        const SizedBox(height: 8),
+                        Text(
+                          item.$2,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: item.$3 ? Colors.white : Colors.white38,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            height: 1.15,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 );
               },
@@ -704,19 +885,23 @@ class _MetricCard extends StatelessWidget {
     required this.title,
     required this.value,
     required this.subtitle,
-    required this.change,
+    this.change,
   });
 
   final IconData icon;
   final String title;
   final String value;
   final String subtitle;
-  final String change;
+
+  /// Change against last month, e.g. `+20%`; hidden when unknown.
+  final String? change;
 
   @override
   Widget build(BuildContext context) {
+    final increase = change != null && !change!.startsWith('-');
+
     return Container(
-      height: 208,
+      height: 180,
       padding: const EdgeInsets.all(18),
       decoration: _innerDecoration(),
       child: Column(
@@ -754,11 +939,16 @@ class _MetricCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: _ProfileColors.muted, fontSize: 14),
           ),
-          const SizedBox(height: 14),
-          Text(
-            '▲ $change',
-            style: const TextStyle(color: Colors.lightGreen, fontSize: 14),
-          ),
+          if (change != null) ...[
+            const Spacer(),
+            Text(
+              '${increase ? '▲' : '▼'} $change vs last month',
+              style: TextStyle(
+                color: increase ? Colors.lightGreen : const Color(0xFFFF8A80),
+                fontSize: 13,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -766,10 +956,15 @@ class _MetricCard extends StatelessWidget {
 }
 
 class _ChartCard extends StatelessWidget {
-  const _ChartCard();
+  const _ChartCard({required this.dailyMinutes});
+
+  final List<(DateTime, double)> dailyMinutes;
 
   @override
   Widget build(BuildContext context) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final total = dailyMinutes.fold<double>(0, (sum, day) => sum + day.$2);
+
     return Container(
       height: 278,
       padding: const EdgeInsets.all(20),
@@ -777,9 +972,9 @@ class _ChartCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Workout Performance',
-            style: TextStyle(
+          Text(
+            'Last 7 days • ${total.round()} min',
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 17,
               fontWeight: FontWeight.w700,
@@ -787,10 +982,33 @@ class _ChartCard extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Expanded(
-            child: CustomPaint(
-              painter: _ChartPainter(),
-              child: const SizedBox.expand(),
+            child: Semantics(
+              label:
+                  'Minutes trained per day: '
+                  '${dailyMinutes.map((d) => '${weekdays[d.$1.weekday - 1]} ${d.$2.round()}').join(', ')}',
+              child: CustomPaint(
+                painter: _ChartPainter([
+                  for (final day in dailyMinutes) day.$2,
+                ]),
+                child: const SizedBox.expand(),
+              ),
             ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              for (final day in dailyMinutes)
+                Expanded(
+                  child: Text(
+                    weekdays[day.$1.weekday - 1],
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: _ProfileColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+            ],
           ),
         ],
       ),
@@ -799,13 +1017,25 @@ class _ChartCard extends StatelessWidget {
 }
 
 class _PanelHeader extends StatelessWidget {
-  const _PanelHeader({required this.title, required this.action});
+  const _PanelHeader({required this.title, this.action, this.onTap});
 
   final String title;
-  final String action;
+  final String? action;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final actionText = action == null
+        ? null
+        : Text(
+            action!,
+            style: const TextStyle(
+              color: _ProfileColors.softGold,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          );
+
     return Row(
       children: [
         Expanded(
@@ -818,14 +1048,10 @@ class _PanelHeader extends StatelessWidget {
             ),
           ),
         ),
-        Text(
-          action,
-          style: const TextStyle(
-            color: _ProfileColors.softGold,
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+        if (actionText != null)
+          onTap == null
+              ? actionText
+              : TextButton(onPressed: onTap, child: actionText),
       ],
     );
   }
@@ -858,7 +1084,12 @@ BoxDecoration _innerDecoration() {
   );
 }
 
+/// Area chart of [values], scaled to the largest value.
 class _ChartPainter extends CustomPainter {
+  _ChartPainter(this.values);
+
+  final List<double> values;
+
   @override
   void paint(Canvas canvas, Size size) {
     final gridPaint = Paint()
@@ -869,15 +1100,22 @@ class _ChartPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
+    if (values.isEmpty) {
+      return;
+    }
+
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    final step = values.length == 1 ? 0.0 : size.width / (values.length - 1);
     final points = [
-      Offset(0, size.height * .82),
-      Offset(size.width * .16, size.height * .74),
-      Offset(size.width * .31, size.height * .62),
-      Offset(size.width * .47, size.height * .50),
-      Offset(size.width * .62, size.height * .28),
-      Offset(size.width * .78, size.height * .18),
-      Offset(size.width, size.height * .30),
+      for (var i = 0; i < values.length; i++)
+        Offset(
+          i * step,
+          size.height -
+              (maxValue == 0 ? 0 : values[i] / maxValue) * size.height * 0.85 -
+              4,
+        ),
     ];
+
     final path = Path()..moveTo(points.first.dx, points.first.dy);
     for (final point in points.skip(1)) {
       path.lineTo(point.dx, point.dy);
@@ -909,8 +1147,64 @@ class _ChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _ChartPainter oldDelegate) =>
+      oldDelegate.values.toString() != values.toString();
 }
+
+String? _change(int current, int previous) {
+  if (previous == 0) {
+    return null;
+  }
+
+  final percent = ((current - previous) / previous * 100).round();
+  return '${percent >= 0 ? '+' : ''}$percent%';
+}
+
+String _duration(int seconds) {
+  final hours = seconds ~/ 3600;
+  final minutes = (seconds % 3600) ~/ 60;
+  if (hours > 0) {
+    return '${hours}h ${minutes}m';
+  }
+  return minutes > 0 ? '${minutes}m' : '${seconds}s';
+}
+
+String _unit(String value, String unit) {
+  final text = value.trim();
+  return text.isEmpty ? 'Not set' : '$text $unit';
+}
+
+String _trim(double value) =>
+    value == value.roundToDouble() ? '${value.round()}' : '$value';
+
+String _bmiCategory(double bmi) {
+  if (bmi < 18.5) return 'Underweight';
+  if (bmi < 25) return 'Normal';
+  if (bmi < 30) return 'Overweight';
+  return 'Obese';
+}
+
+const _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+String _monthYear(String isoDate) {
+  final date = DateTime.tryParse(isoDate);
+  return date == null ? 'Not set' : '${_months[date.month - 1]} ${date.year}';
+}
+
+String _shortDate(DateTime date) => '${_months[date.month - 1]} ${date.day}';
 
 class _ProfileColors {
   const _ProfileColors._();

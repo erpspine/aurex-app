@@ -1,260 +1,299 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import 'bottom_nav.dart';
-import 'workout_session.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class WorkoutDetailPage extends StatelessWidget {
-  const WorkoutDetailPage({
-    super.key,
-    required this.title,
-    required this.muscle,
-    required this.level,
-    required this.reps,
-  });
+/// Details of a single exercise and the entry point to a workout session.
+class WorkoutDetailPage extends ConsumerWidget {
+  const WorkoutDetailPage({super.key, required this.exerciseId});
 
-  final String title;
-  final String muscle;
-  final String level;
-  final String reps;
+  final String exerciseId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final exerciseAsync = ref.watch(exerciseByIdProvider(exerciseId));
+
     return Scaffold(
       backgroundColor: _WorkoutColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
-          children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(22, 28, 22, 124),
-              children: [
-                _HeroHeader(
-                  title: title,
-                  muscle: muscle,
-                  level: level,
-                  reps: reps,
-                ),
-                const SizedBox(height: 18),
-                const _StatsPanel(),
-                const SizedBox(height: 28),
-                const _SectionTitle('MUSCLES WORKED'),
-                const SizedBox(height: 14),
-                const _MusclesWorkedCard(),
-                const SizedBox(height: 28),
-                const _HowToPerform(),
-                const SizedBox(height: 22),
-                Divider(color: Colors.white.withValues(alpha: 0.24)),
-                const SizedBox(height: 22),
-                const _WorkoutSets(),
-                const SizedBox(height: 24),
-                SizedBox(
-                  height: 66,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => WorkoutSessionPage(
-                            title: title,
-                            muscle: muscle,
-                            level: level,
-                            reps: reps,
-                          ),
-                        ),
-                      );
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _WorkoutColors.softGold,
-                      foregroundColor: Colors.black,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    icon: const Icon(Icons.play_arrow_rounded, size: 28),
-                    label: const Text(
-                      'START WORKOUT',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 1),
-            ),
-          ],
-        ),
+        child: switch (exerciseAsync) {
+          AsyncData(value: final exercise?) => _ExerciseBody(
+            exercise: exercise,
+          ),
+          AsyncData() => const _DetailMessage(
+            message: 'This exercise is no longer available.',
+          ),
+          AsyncError(:final error) => _DetailMessage(
+            message: error.toString(),
+            onRetry: () => ref.invalidate(exercisesProvider),
+          ),
+          _ => const Center(
+            child: CircularProgressIndicator(color: _WorkoutColors.softGold),
+          ),
+        },
       ),
+    );
+  }
+}
+
+class _ExerciseBody extends StatelessWidget {
+  const _ExerciseBody({required this.exercise});
+
+  final MobileExercise exercise;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(22, 28, 22, 124),
+      children: [
+        const _TopBar(),
+        const SizedBox(height: 18),
+        _HeroHeader(exercise: exercise),
+        const SizedBox(height: 18),
+        _StatsPanel(exercise: exercise),
+        if (exercise.muscleTags.isNotEmpty) ...[
+          const SizedBox(height: 28),
+          const _SectionTitle('MUSCLES WORKED'),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final tag in exercise.muscleTags) _MuscleChip(label: tag),
+            ],
+          ),
+        ],
+        const SizedBox(height: 28),
+        _HowToPerform(exercise: exercise),
+        const SizedBox(height: 22),
+        Divider(color: Colors.white.withValues(alpha: 0.24)),
+        const SizedBox(height: 22),
+        _PlannedSets(exercise: exercise),
+        const SizedBox(height: 24),
+        SizedBox(
+          height: 66,
+          child: ElevatedButton.icon(
+            onPressed: () => context.push(AurexRoutes.session(exercise.id)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _WorkoutColors.softGold,
+              foregroundColor: Colors.black,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            icon: const Icon(Icons.play_arrow_rounded, size: 28),
+            label: const Text(
+              'START WORKOUT',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TopBar extends StatelessWidget {
+  const _TopBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        IconButton(
+          tooltip: 'Back',
+          onPressed: () => popOrGo(context, AurexRoutes.home),
+          icon: const Icon(Icons.arrow_back, color: Colors.white, size: 32),
+        ),
+        const Spacer(),
+        Image.asset(
+          'assets/images/placeholder.png',
+          width: 176,
+          fit: BoxFit.contain,
+        ),
+        const Spacer(),
+        const SizedBox(width: 48),
+      ],
+    );
+  }
+}
+
+class _DetailMessage extends StatelessWidget {
+  const _DetailMessage({required this.message, this.onRetry});
+
+  final String message;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(22, 28, 22, 124),
+      children: [
+        const _TopBar(),
+        const SizedBox(height: 60),
+        Text(
+          message,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: _WorkoutColors.muted, fontSize: 16),
+        ),
+        if (onRetry != null)
+          Center(
+            child: TextButton(
+              onPressed: onRetry,
+              child: const Text(
+                'Retry',
+                style: TextStyle(color: _WorkoutColors.softGold),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
 
 class _HeroHeader extends StatelessWidget {
-  const _HeroHeader({
-    required this.title,
-    required this.muscle,
-    required this.level,
-    required this.reps,
-  });
+  const _HeroHeader({required this.exercise});
 
-  final String title;
-  final String muscle;
-  final String level;
-  final String reps;
+  final MobileExercise exercise;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 500,
-      child: Stack(
-        children: [
-          Positioned(
-            top: 116,
-            right: -28,
-            bottom: 0,
-            width: 450,
-            child: Image.asset(
-              'assets/images/workout_detail_hero.png',
-              fit: BoxFit.cover,
-              alignment: Alignment.centerRight,
+    final badge = exercise.equipment.isNotEmpty
+        ? exercise.equipment
+        : exercise.category;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: AspectRatio(
+            aspectRatio: 16 / 10,
+            child: _ExerciseImage(url: exercise.imageUrl),
+          ),
+        ),
+        const SizedBox(height: 22),
+        if (badge.isNotEmpty) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: _WorkoutColors.gold.withValues(alpha: 0.24),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              badge.toUpperCase(),
+              style: const TextStyle(
+                color: _WorkoutColors.softGold,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Row(
-              children: [
-                IconButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(
-                    Icons.arrow_back,
-                    color: Colors.white,
-                    size: 32,
-                  ),
-                ),
-                const Spacer(),
-                Image.asset(
-                  'assets/images/placeholder.png',
-                  width: 176,
-                  fit: BoxFit.contain,
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: () {},
-                  icon: const Icon(
-                    Icons.ios_share,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-                IconButton(
-                  onPressed: () {},
-                  icon: const Icon(
-                    Icons.bookmark_border,
-                    color: Colors.white,
-                    size: 30,
-                  ),
-                ),
-              ],
-            ),
+          const SizedBox(height: 16),
+        ],
+        Text(
+          exercise.name.toUpperCase(),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 34,
+            fontWeight: FontWeight.w900,
+            height: 1.1,
           ),
-          Positioned(
-            left: 0,
-            top: 140,
-            width: 410,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _WorkoutColors.gold.withValues(alpha: 0.24),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Text(
-                    'MACHINE',
-                    style: TextStyle(
-                      color: _WorkoutColors.softGold,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  title.toUpperCase(),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 36,
-                    fontWeight: FontWeight.w900,
-                    height: 1.1,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.accessibility_new_rounded,
-                      color: _WorkoutColors.gold,
-                      size: 26,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      muscle,
-                      style: const TextStyle(color: Colors.white, fontSize: 17),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'Build strong, capped shoulders by pressing weight overhead in a controlled movement.',
-                  style: TextStyle(
-                    color: _WorkoutColors.muted,
-                    fontSize: 17,
-                    height: 1.45,
-                  ),
-                ),
-                const SizedBox(height: 22),
-                Wrap(
-                  spacing: 14,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    const _Meta(Icons.schedule, '45 sec'),
-                    const _DividerMark(),
-                    _Meta(Icons.bar_chart_rounded, level),
-                    const _DividerMark(),
-                    _Meta(Icons.restaurant_rounded, reps),
-                  ],
-                ),
-              ],
+        ),
+        if (exercise.bodyPart.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              const Icon(
+                Icons.accessibility_new_rounded,
+                color: _WorkoutColors.gold,
+                size: 26,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                exercise.bodyPart,
+                style: const TextStyle(color: Colors.white, fontSize: 17),
+              ),
+            ],
+          ),
+        ],
+        if (exercise.description.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          Text(
+            exercise.description,
+            style: const TextStyle(
+              color: _WorkoutColors.muted,
+              fontSize: 17,
+              height: 1.45,
             ),
           ),
         ],
-      ),
+        const SizedBox(height: 20),
+        Wrap(
+          spacing: 14,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            _Meta(Icons.schedule, 'Rest ${exercise.restTime}'),
+            const _DividerMark(),
+            _Meta(Icons.bar_chart_rounded, exercise.level),
+            const _DividerMark(),
+            _Meta(Icons.repeat_rounded, exercise.reps),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ExerciseImage extends StatelessWidget {
+  const _ExerciseImage({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    const fallback = 'assets/images/workout_detail_hero.png';
+
+    if (url.isEmpty) {
+      return Image.asset(fallback, fit: BoxFit.cover);
+    }
+
+    return Image.network(
+      url,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) =>
+          Image.asset(fallback, fit: BoxFit.cover),
     );
   }
 }
 
 class _StatsPanel extends StatelessWidget {
-  const _StatsPanel();
+  const _StatsPanel({required this.exercise});
+
+  final MobileExercise exercise;
 
   @override
   Widget build(BuildContext context) {
-    const stats = [
-      (Icons.accessibility_new_rounded, 'Primary Muscle', 'Shoulders'),
-      (Icons.track_changes_rounded, 'Type', 'Strength'),
-      (Icons.fitness_center_rounded, 'Equipment', 'Machine'),
-      (Icons.local_fire_department_rounded, 'Calories', '120-150'),
+    final stats = [
+      (
+        Icons.accessibility_new_rounded,
+        'Primary Muscle',
+        _orDash(exercise.bodyPart),
+      ),
+      (Icons.track_changes_rounded, 'Type', _orDash(exercise.category)),
+      (
+        Icons.fitness_center_rounded,
+        'Equipment',
+        exercise.equipment.isEmpty ? 'None' : exercise.equipment,
+      ),
+      (Icons.view_comfy_alt_rounded, 'Sets', '${exercise.setCount}'),
     ];
 
     return Container(
@@ -268,29 +307,34 @@ class _StatsPanel extends StatelessWidget {
         children: [
           for (var i = 0; i < stats.length; i++) ...[
             Expanded(
-              child: Column(
-                children: [
-                  Icon(stats[i].$1, color: _WorkoutColors.gold, size: 30),
-                  const SizedBox(height: 10),
-                  Text(
-                    stats[i].$2,
-                    style: const TextStyle(
-                      color: _WorkoutColors.muted,
-                      fontSize: 14,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Column(
+                  children: [
+                    Icon(stats[i].$1, color: _WorkoutColors.gold, size: 30),
+                    const SizedBox(height: 10),
+                    Text(
+                      stats[i].$2,
+                      style: const TextStyle(
+                        color: _WorkoutColors.muted,
+                        fontSize: 13,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    stats[i].$3,
-                    style: const TextStyle(
-                      color: _WorkoutColors.softGold,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
+                    const SizedBox(height: 4),
+                    Text(
+                      stats[i].$3,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _WorkoutColors.softGold,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             if (i < stats.length - 1)
@@ -306,172 +350,121 @@ class _StatsPanel extends StatelessWidget {
   }
 }
 
-class _MusclesWorkedCard extends StatelessWidget {
-  const _MusclesWorkedCard();
+class _MuscleChip extends StatelessWidget {
+  const _MuscleChip({required this.label});
+
+  final String label;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 236,
-      clipBehavior: Clip.antiAlias,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.035),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _WorkoutColors.gold.withValues(alpha: 0.6)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 3,
-            child: Image.asset(
-              'assets/images/workout_muscles_shoulders.png',
-              fit: BoxFit.cover,
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 26, 14, 22),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  _Legend(
-                    color: _WorkoutColors.softGold,
-                    title: 'Primary',
-                    subtitle: 'Anterior Deltoid',
-                  ),
-                  SizedBox(height: 24),
-                  _Legend(
-                    color: Color(0xFFFF8B1A),
-                    title: 'Secondary',
-                    subtitle: 'Lateral Deltoid',
-                  ),
-                  SizedBox(height: 24),
-                  _Legend(
-                    color: Color(0xFF8F8F8F),
-                    title: 'Stabilizer',
-                    subtitle: 'Triceps',
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+      child: Text(
+        label,
+        style: const TextStyle(color: Colors.white, fontSize: 14),
       ),
     );
   }
 }
 
 class _HowToPerform extends StatelessWidget {
-  const _HowToPerform();
+  const _HowToPerform({required this.exercise});
+
+  final MobileExercise exercise;
+
+  Future<void> _openVideo(BuildContext context) async {
+    final uri = Uri.tryParse(exercise.videoUrl);
+    final opened =
+        uri != null &&
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to open the exercise video.')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    const steps = [
-      'Sit on the machine with your back firmly against the pad.',
-      'Grip the handles at shoulder height with palms facing forward.',
-      'Press the handles upward until your arms are fully extended.',
-      'Slowly lower the handles back to the starting position.',
-    ];
+    final steps = exercise.instructions
+        .expand((step) => step.split('\n'))
+        .map((step) => step.trim())
+        .where((step) => step.isNotEmpty)
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          children: const [
-            Expanded(child: _SectionTitle('HOW TO PERFORM')),
-            Text(
-              'View Animation',
-              style: TextStyle(
-                color: _WorkoutColors.softGold,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+          children: [
+            const Expanded(child: _SectionTitle('HOW TO PERFORM')),
+            if (exercise.videoUrl.isNotEmpty)
+              TextButton.icon(
+                onPressed: () => _openVideo(context),
+                style: TextButton.styleFrom(
+                  foregroundColor: _WorkoutColors.softGold,
+                ),
+                icon: const Icon(Icons.play_circle_outline, size: 26),
+                label: const Text(
+                  'Watch Video',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
               ),
-            ),
-            SizedBox(width: 8),
-            Icon(
-              Icons.play_circle_outline,
-              color: _WorkoutColors.softGold,
-              size: 27,
-            ),
           ],
         ),
         const SizedBox(height: 14),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                children: [
-                  for (var i = 0; i < steps.length; i++) ...[
-                    _StepLine(number: i + 1, text: steps[i]),
-                    const SizedBox(height: 10),
-                  ],
-                ],
-              ),
+        if (steps.isEmpty)
+          const Text(
+            'Step-by-step instructions have not been added for this exercise '
+            'yet. Ask a trainer at the front desk for a demonstration.',
+            style: TextStyle(
+              color: _WorkoutColors.muted,
+              fontSize: 15,
+              height: 1.35,
             ),
-            const SizedBox(width: 18),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Image.asset(
-                    'assets/images/workout_animation_thumb.png',
-                    width: 230,
-                    height: 186,
-                    fit: BoxFit.cover,
-                  ),
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.55),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.play_arrow_rounded,
-                      color: _WorkoutColors.softGold,
-                      size: 36,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          )
+        else
+          for (var i = 0; i < steps.length; i++) ...[
+            _StepLine(number: i + 1, text: steps[i]),
+            const SizedBox(height: 10),
           ],
-        ),
       ],
     );
   }
 }
 
-class _WorkoutSets extends StatelessWidget {
-  const _WorkoutSets();
+class _PlannedSets extends StatelessWidget {
+  const _PlannedSets({required this.exercise});
+
+  final MobileExercise exercise;
 
   @override
   Widget build(BuildContext context) {
-    const rows = [
-      ('1', '20 kg', '12', '60 sec', 'Completed', Icons.check_circle_outline),
-      ('2', '25 kg', '10', '60 sec', 'Completed', Icons.check_circle_outline),
-      ('3', '30 kg', '10', '60 sec', 'In Progress', Icons.radio_button_checked),
-      ('4', '30 kg', '8', '60 sec', 'Upcoming', Icons.radio_button_unchecked),
-    ];
-
     return Column(
       children: [
         Row(
-          children: const [
-            Expanded(child: _SectionTitle('WORKOUT SETS')),
+          children: [
+            const Expanded(child: _SectionTitle('WORKOUT SETS')),
             Text(
-              'Rest Timer: 60 sec',
-              style: TextStyle(
+              'Rest: ${exercise.restTime}',
+              style: const TextStyle(
                 color: _WorkoutColors.softGold,
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            SizedBox(width: 8),
-            Icon(Icons.schedule, color: _WorkoutColors.softGold, size: 22),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.schedule,
+              color: _WorkoutColors.softGold,
+              size: 22,
+            ),
           ],
         ),
         const SizedBox(height: 14),
@@ -483,17 +476,9 @@ class _WorkoutSets extends StatelessWidget {
           ),
           child: Column(
             children: [
-              const _SetRow(
-                values: ['SET', 'WEIGHT', 'REPS', 'REST', 'STATUS'],
-                header: true,
-              ),
-              for (final row in rows)
-                _SetRow(
-                  values: [row.$1, row.$2, row.$3, row.$4, row.$5],
-                  icon: row.$6,
-                  active: row.$5 == 'In Progress',
-                  complete: row.$5 == 'Completed',
-                ),
+              const _SetRow(values: ['SET', 'REPS', 'REST'], header: true),
+              for (var set = 1; set <= exercise.setCount; set++)
+                _SetRow(values: ['$set', exercise.reps, exercise.restTime]),
             ],
           ),
         ),
@@ -503,116 +488,40 @@ class _WorkoutSets extends StatelessWidget {
 }
 
 class _SetRow extends StatelessWidget {
-  const _SetRow({
-    required this.values,
-    this.header = false,
-    this.active = false,
-    this.complete = false,
-    this.icon,
-  });
+  const _SetRow({required this.values, this.header = false});
 
   final List<String> values;
   final bool header;
-  final bool active;
-  final bool complete;
-  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
-    final color = active
-        ? _WorkoutColors.softGold
-        : header
-        ? _WorkoutColors.muted
-        : Colors.white;
+    final color = header ? _WorkoutColors.muted : Colors.white;
 
     return Container(
       height: header ? 46 : 50,
-      margin: active ? const EdgeInsets.symmetric(horizontal: 10) : null,
       decoration: BoxDecoration(
-        border: active
-            ? Border.all(color: _WorkoutColors.gold)
-            : Border(
-                top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-              ),
-        borderRadius: active ? BorderRadius.circular(7) : null,
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+        ),
       ),
       child: Row(
         children: [
-          for (var i = 0; i < values.length; i++)
+          for (final value in values)
             Expanded(
-              child: i == 4 && !header
-                  ? Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          icon,
-                          color: complete
-                              ? Colors.greenAccent
-                              : active
-                              ? _WorkoutColors.softGold
-                              : _WorkoutColors.muted,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 7),
-                        Flexible(
-                          child: Text(
-                            values[i],
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: color, fontSize: 15),
-                          ),
-                        ),
-                      ],
-                    )
-                  : Text(
-                      values[i],
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: color,
-                        fontSize: header ? 13 : 15,
-                        fontWeight: header ? FontWeight.w800 : FontWeight.w400,
-                      ),
-                    ),
+              child: Text(
+                value,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color,
+                  fontSize: header ? 13 : 15,
+                  fontWeight: header ? FontWeight.w800 : FontWeight.w400,
+                ),
+              ),
             ),
         ],
       ),
-    );
-  }
-}
-
-class _Legend extends StatelessWidget {
-  const _Legend({
-    required this.color,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final Color color;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 15,
-          height: 15,
-          margin: const EdgeInsets.only(top: 4),
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Text(
-            '$title\n$subtitle',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              height: 1.45,
-            ),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -713,6 +622,8 @@ class _DividerMark extends StatelessWidget {
     );
   }
 }
+
+String _orDash(String value) => value.trim().isEmpty ? '-' : value;
 
 class _WorkoutColors {
   const _WorkoutColors._();

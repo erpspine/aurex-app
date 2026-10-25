@@ -1,55 +1,70 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'bottom_nav.dart';
+import 'activity.dart';
+import 'api_client.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class WorkoutSessionPage extends StatelessWidget {
-  const WorkoutSessionPage({
-    super.key,
-    required this.title,
-    required this.muscle,
-    required this.level,
-    required this.reps,
-  });
+class WorkoutSessionPage extends ConsumerWidget {
+  const WorkoutSessionPage({super.key, required this.exerciseId});
 
-  final String title;
-  final String muscle;
-  final String level;
-  final String reps;
+  final String exerciseId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final exerciseAsync = ref.watch(exerciseByIdProvider(exerciseId));
+
     return Scaffold(
       backgroundColor: _SessionColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
+        child: switch (exerciseAsync) {
+          AsyncData(value: final exercise?) => _SessionView(exercise: exercise),
+          AsyncData() => _SessionMessage(
+            message: 'This exercise is no longer available.',
+            exerciseId: exerciseId,
+          ),
+          AsyncError(:final error) => _SessionMessage(
+            message: error.toString(),
+            exerciseId: exerciseId,
+          ),
+          _ => const Center(
+            child: CircularProgressIndicator(color: _SessionColors.softGold),
+          ),
+        },
+      ),
+    );
+  }
+}
+
+class _SessionMessage extends StatelessWidget {
+  const _SessionMessage({required this.message, required this.exerciseId});
+
+  final String message;
+  final String exerciseId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(28, 28, 28, 126),
-              children: [
-                _SessionHeader(
-                  title: title,
-                  muscle: muscle,
-                  level: level,
-                  reps: reps,
-                ),
-                const SizedBox(height: 20),
-                const _ProgressPanel(),
-                const SizedBox(height: 26),
-                const _CurrentSetPanel(),
-                const SizedBox(height: 28),
-                const _WorkoutSets(),
-                const SizedBox(height: 20),
-                const _TipsCard(),
-                const SizedBox(height: 24),
-                const _ActionButtons(),
-              ],
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _SessionColors.muted, fontSize: 16),
             ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 1),
+            TextButton(
+              onPressed: () => popOrGo(context, AurexRoutes.home),
+              child: const Text(
+                'Go back',
+                style: TextStyle(color: _SessionColors.softGold),
+              ),
             ),
           ],
         ),
@@ -58,157 +73,301 @@ class WorkoutSessionPage extends StatelessWidget {
   }
 }
 
-class _SessionHeader extends StatelessWidget {
-  const _SessionHeader({
-    required this.title,
-    required this.muscle,
-    required this.level,
-    required this.reps,
-  });
+class _SessionView extends ConsumerWidget {
+  const _SessionView({required this.exercise});
 
-  final String title;
-  final String muscle;
-  final String level;
-  final String reps;
+  final MobileExercise exercise;
 
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 408,
-      child: Stack(
-        children: [
-          Positioned(
-            right: -28,
-            bottom: 0,
-            width: 325,
-            height: 300,
-            child: Image.asset(
-              'assets/images/session_hero.png',
-              fit: BoxFit.cover,
-              alignment: Alignment.centerRight,
-            ),
+  WorkoutSessionPlan get _plan => (
+    exerciseId: exercise.id,
+    sets: exercise.setCount,
+    reps: exercise.targetReps,
+    restSeconds: exercise.restSeconds,
+  );
+
+  Future<void> _save(WidgetRef ref, WorkoutSessionState session) async {
+    final now = DateTime.now();
+    await ref
+        .read(workoutHistoryProvider.notifier)
+        .add(
+          WorkoutLogEntry(
+            id: session.id,
+            exerciseId: exercise.id,
+            exerciseName: exercise.name,
+            bodyPart: exercise.bodyPart,
+            completedAt: now,
+            durationSeconds: session.elapsedSeconds,
+            sets: [
+              for (final set in session.sets.where((set) => set.done))
+                LoggedSet(reps: set.reps, weightKg: set.weightKg),
+            ],
           ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Row(
-              children: [
-                IconButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(
-                    Icons.arrow_back_ios_new,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-                const Spacer(),
-                Image.asset(
-                  'assets/images/placeholder.png',
-                  width: 176,
-                  fit: BoxFit.contain,
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: () {},
-                  icon: const Icon(
-                    Icons.music_note,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-                IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.more_horiz, color: Colors.white),
-                ),
-              ],
-            ),
+        );
+  }
+
+  Future<void> _end(BuildContext context, WidgetRef ref) async {
+    final session = ref.read(workoutSessionProvider(_plan));
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (session.completedCount == 0) {
+      popOrGo(context, AurexRoutes.exercise(exercise.id));
+      return;
+    }
+
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF141414),
+        title: Text(session.finished ? 'Workout complete!' : 'End workout?'),
+        content: Text(
+          'You completed ${session.completedCount} of ${session.sets.length} '
+          'sets in ${_clock(session.elapsedSeconds)}.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Discard'),
           ),
-          Positioned(
-            left: 0,
-            top: 138,
-            child: Container(
-              width: 132,
-              height: 164,
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(13),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
-              ),
-              child: Image.asset(
-                'assets/images/session_machine_thumb.png',
-                fit: BoxFit.cover,
-              ),
-            ),
-          ),
-          Positioned(
-            left: 156,
-            top: 142,
-            width: 360,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'MACHINE',
-                  style: TextStyle(
-                    color: _SessionColors.softGold,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  title.toUpperCase(),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    height: 1.12,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.accessibility_new_rounded,
-                      color: _SessionColors.gold,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      muscle,
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Positioned(
-            left: 0,
-            bottom: 0,
-            child: Wrap(
-              spacing: 12,
-              children: [
-                const _InfoPill(Icons.schedule, '45 sec'),
-                _InfoPill(Icons.bar_chart_rounded, level, highlighted: true),
-                _InfoPill(Icons.restaurant_rounded, reps),
-              ],
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Save to Progress',
+              style: TextStyle(color: _SessionColors.softGold),
             ),
           ),
         ],
       ),
     );
+
+    if (save == null || !context.mounted) {
+      return;
+    }
+
+    if (save) {
+      try {
+        await _save(ref, session);
+      } on AurexApiException catch (error) {
+        // Stay on the page so the member can try saving again.
+        messenger.showSnackBar(
+          SnackBar(content: Text('Workout not saved: ${error.message}')),
+        );
+        return;
+      }
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Workout saved to your progress.')),
+      );
+    }
+
+    if (context.mounted) {
+      popOrGo(context, AurexRoutes.exercise(exercise.id));
+    }
+  }
+
+  Future<void> _adjustSet(BuildContext context, WidgetRef ref) async {
+    final session = ref.read(workoutSessionProvider(_plan));
+    final index = session.currentIndex;
+    if (index >= session.sets.length) {
+      return;
+    }
+
+    final result = await showDialog<(double, int)>(
+      context: context,
+      builder: (context) => _AdjustSetDialog(set: session.sets[index]),
+    );
+
+    if (result != null) {
+      final controller = ref.read(workoutSessionProvider(_plan).notifier);
+      controller.setWeight(result.$1);
+      controller.setReps(result.$2);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(workoutSessionProvider(_plan));
+    final controller = ref.read(workoutSessionProvider(_plan).notifier);
+
+    ref.listen(workoutSessionProvider(_plan).select((s) => s.finished), (
+      wasFinished,
+      finished,
+    ) {
+      if (finished && wasFinished == false) {
+        _end(context, ref);
+      }
+    });
+
+    final tip = exercise.instructions.isNotEmpty
+        ? exercise.instructions.first
+        : exercise.description;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(22, 28, 22, 126),
+      children: [
+        _SessionHeader(exercise: exercise, onBack: () => _end(context, ref)),
+        const SizedBox(height: 20),
+        _ProgressPanel(session: session, onTogglePause: controller.togglePause),
+        const SizedBox(height: 22),
+        _CurrentSetPanel(session: session, onSkipRest: controller.skipRest),
+        const SizedBox(height: 26),
+        _WorkoutSets(session: session),
+        if (tip.trim().isNotEmpty) ...[
+          const SizedBox(height: 20),
+          _TipsCard(tip: tip.trim()),
+        ],
+        const SizedBox(height: 24),
+        _ActionButtons(
+          session: session,
+          onAdjust: () => _adjustSet(context, ref),
+          onComplete: controller.completeSet,
+          onEnd: () => _end(context, ref),
+        ),
+      ],
+    );
+  }
+}
+
+class _SessionHeader extends StatelessWidget {
+  const _SessionHeader({required this.exercise, required this.onBack});
+
+  final MobileExercise exercise;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = exercise.equipment.isNotEmpty
+        ? exercise.equipment
+        : exercise.category;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              tooltip: 'End workout',
+              onPressed: onBack,
+              icon: const Icon(
+                Icons.arrow_back_ios_new,
+                color: Colors.white,
+                size: 26,
+              ),
+            ),
+            const Spacer(),
+            Image.asset(
+              'assets/images/placeholder.png',
+              width: 176,
+              fit: BoxFit.contain,
+            ),
+            const Spacer(),
+            const SizedBox(width: 48),
+          ],
+        ),
+        const SizedBox(height: 18),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 112,
+              height: 136,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+              ),
+              child: exercise.imageUrl.isEmpty
+                  ? Image.asset(
+                      'assets/images/session_machine_thumb.png',
+                      fit: BoxFit.cover,
+                    )
+                  : Image.network(
+                      exercise.imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Image.asset(
+                        'assets/images/session_machine_thumb.png',
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 18),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (badge.isNotEmpty)
+                    Text(
+                      badge.toUpperCase(),
+                      style: const TextStyle(
+                        color: _SessionColors.softGold,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  Text(
+                    exercise.name.toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 26,
+                      height: 1.12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  if (exercise.bodyPart.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.accessibility_new_rounded,
+                          color: _SessionColors.gold,
+                          size: 22,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            exercise.bodyPart,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        Wrap(
+          spacing: 12,
+          runSpacing: 10,
+          children: [
+            _InfoPill(Icons.schedule, 'Rest ${exercise.restTime}'),
+            _InfoPill(
+              Icons.bar_chart_rounded,
+              exercise.level,
+              highlighted: true,
+            ),
+            _InfoPill(Icons.repeat_rounded, exercise.reps),
+          ],
+        ),
+      ],
+    );
   }
 }
 
 class _ProgressPanel extends StatelessWidget {
-  const _ProgressPanel();
+  const _ProgressPanel({required this.session, required this.onTogglePause});
+
+  final WorkoutSessionState session;
+  final VoidCallback onTogglePause;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(30, 24, 30, 24),
+      padding: const EdgeInsets.fromLTRB(24, 22, 18, 22),
       decoration: _panelDecoration(20),
       child: Row(
         children: [
@@ -218,21 +377,21 @@ class _ProgressPanel extends StatelessWidget {
               children: [
                 const Text(
                   'SET PROGRESS',
-                  style: TextStyle(color: _SessionColors.muted, fontSize: 16),
+                  style: TextStyle(color: _SessionColors.muted, fontSize: 15),
                 ),
-                const SizedBox(height: 16),
-                const Text.rich(
+                const SizedBox(height: 12),
+                Text.rich(
                   TextSpan(
-                    text: '2',
-                    style: TextStyle(
+                    text: '${session.completedCount}',
+                    style: const TextStyle(
                       color: _SessionColors.softGold,
-                      fontSize: 34,
+                      fontSize: 32,
                       fontWeight: FontWeight.w900,
                     ),
                     children: [
                       TextSpan(
-                        text: ' / 4',
-                        style: TextStyle(color: Colors.white),
+                        text: ' / ${session.sets.length}',
+                        style: const TextStyle(color: Colors.white),
                       ),
                     ],
                   ),
@@ -241,7 +400,7 @@ class _ProgressPanel extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: LinearProgressIndicator(
-                    value: 0.58,
+                    value: session.completedCount / session.sets.length,
                     minHeight: 9,
                     backgroundColor: Colors.white24,
                     valueColor: const AlwaysStoppedAnimation(
@@ -252,35 +411,40 @@ class _ProgressPanel extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 48),
+          const SizedBox(width: 24),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'WORKOUT TIME',
-                style: TextStyle(color: _SessionColors.muted, fontSize: 16),
+                'TIME',
+                style: TextStyle(color: _SessionColors.muted, fontSize: 15),
               ),
-              const SizedBox(height: 18),
-              const Text(
-                '06:45',
-                style: TextStyle(
+              const SizedBox(height: 14),
+              Text(
+                _clock(session.elapsedSeconds),
+                style: const TextStyle(
                   color: _SessionColors.softGold,
-                  fontSize: 32,
+                  fontSize: 28,
                   fontWeight: FontWeight.w900,
+                  fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
             ],
           ),
-          const SizedBox(width: 28),
+          const SizedBox(width: 12),
           OutlinedButton(
-            onPressed: () {},
+            onPressed: session.finished ? null : onTogglePause,
             style: OutlinedButton.styleFrom(
               foregroundColor: _SessionColors.softGold,
               side: const BorderSide(color: _SessionColors.gold),
               shape: const CircleBorder(),
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
             ),
-            child: const Icon(Icons.pause, size: 32),
+            child: Icon(
+              session.paused ? Icons.play_arrow : Icons.pause,
+              size: 28,
+              semanticLabel: session.paused ? 'Resume' : 'Pause',
+            ),
           ),
         ],
       ),
@@ -289,38 +453,75 @@ class _ProgressPanel extends StatelessWidget {
 }
 
 class _CurrentSetPanel extends StatelessWidget {
-  const _CurrentSetPanel();
+  const _CurrentSetPanel({required this.session, required this.onSkipRest});
+
+  final WorkoutSessionState session;
+  final VoidCallback onSkipRest;
 
   @override
   Widget build(BuildContext context) {
+    if (session.finished) {
+      return Container(
+        padding: const EdgeInsets.all(26),
+        decoration: _panelDecoration(20),
+        child: const Row(
+          children: [
+            Icon(Icons.emoji_events, color: _SessionColors.softGold, size: 44),
+            SizedBox(width: 18),
+            Expanded(
+              child: Text(
+                'All sets complete. Great work!',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final index = session.currentIndex;
+    final current = session.sets[index];
+    final next = index + 1 < session.sets.length
+        ? session.sets[index + 1]
+        : null;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isNarrow = constraints.maxWidth < 620;
+        final summary = session.resting
+            ? _RestTimer(
+                size: isNarrow ? 200 : 240,
+                remaining: session.restRemaining,
+                total: session.restSeconds,
+                onSkip: onSkipRest,
+              )
+            : _CurrentSetSummary(
+                number: index + 1,
+                set: current,
+                compact: isNarrow,
+              );
+        final upNext = _UpNextCard(
+          width: isNarrow ? 128 : 168,
+          number: next == null ? null : index + 2,
+          set: next,
+          compact: isNarrow,
+        );
 
         return Container(
           padding: EdgeInsets.all(isNarrow ? 22 : 30),
           decoration: _panelDecoration(20),
-          child: isNarrow
-              ? Column(
-                  children: const [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: _CurrentSetSummary(compact: true)),
-                        SizedBox(width: 16),
-                        _UpNextCard(width: 128, compact: true),
-                      ],
-                    ),
-                    SizedBox(height: 24),
-                    _RestTimer(size: 218),
-                  ],
-                )
-              : const Row(
+          child: isNarrow && session.resting
+              ? Column(children: [summary, const SizedBox(height: 18), upNext])
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: _CurrentSetSummary()),
-                    _RestTimer(size: 250),
-                    SizedBox(width: 28),
-                    _UpNextCard(width: 168),
+                    Expanded(child: Center(child: summary)),
+                    const SizedBox(width: 16),
+                    upNext,
                   ],
                 ),
         );
@@ -330,8 +531,14 @@ class _CurrentSetPanel extends StatelessWidget {
 }
 
 class _CurrentSetSummary extends StatelessWidget {
-  const _CurrentSetSummary({this.compact = false});
+  const _CurrentSetSummary({
+    required this.number,
+    required this.set,
+    this.compact = false,
+  });
 
+  final int number;
+  final SessionSet set;
   final bool compact;
 
   @override
@@ -350,7 +557,7 @@ class _CurrentSetSummary extends StatelessWidget {
         ),
         SizedBox(height: compact ? 12 : 22),
         Text(
-          '3',
+          '$number',
           style: TextStyle(
             color: Colors.white,
             fontSize: compact ? 48 : 58,
@@ -359,7 +566,7 @@ class _CurrentSetSummary extends StatelessWidget {
         ),
         SizedBox(height: compact ? 8 : 12),
         Text(
-          '10 REPS',
+          '${set.reps} REPS',
           style: TextStyle(
             color: Colors.white,
             fontSize: compact ? 24 : 30,
@@ -368,7 +575,7 @@ class _CurrentSetSummary extends StatelessWidget {
         ),
         SizedBox(height: compact ? 18 : 32),
         Text(
-          '30 kg',
+          _weight(set.weightKg),
           style: TextStyle(
             color: _SessionColors.softGold,
             fontSize: compact ? 22 : 26,
@@ -386,9 +593,16 @@ class _CurrentSetSummary extends StatelessWidget {
 }
 
 class _UpNextCard extends StatelessWidget {
-  const _UpNextCard({required this.width, this.compact = false});
+  const _UpNextCard({
+    required this.width,
+    required this.number,
+    required this.set,
+    this.compact = false,
+  });
 
   final double width;
+  final int? number;
+  final SessionSet? set;
   final bool compact;
 
   @override
@@ -410,32 +624,43 @@ class _UpNextCard extends StatelessWidget {
             style: TextStyle(color: _SessionColors.muted, fontSize: 16),
           ),
           SizedBox(height: compact ? 14 : 22),
-          Text(
-            'Set 4',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: compact ? 20 : 24,
-              fontWeight: FontWeight.w800,
+          if (set == null)
+            Text(
+              'Last set',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: compact ? 18 : 22,
+                fontWeight: FontWeight.w800,
+              ),
+            )
+          else ...[
+            Text(
+              'Set $number',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: compact ? 20 : 24,
+                fontWeight: FontWeight.w800,
+              ),
             ),
-          ),
-          SizedBox(height: compact ? 14 : 22),
-          Text(
-            '8 REPS',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: compact ? 19 : 23,
-              fontWeight: FontWeight.w900,
+            SizedBox(height: compact ? 14 : 22),
+            Text(
+              '${set!.reps} REPS',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: compact ? 19 : 23,
+                fontWeight: FontWeight.w900,
+              ),
             ),
-          ),
-          SizedBox(height: compact ? 14 : 22),
-          Text(
-            '30 kg',
-            style: TextStyle(
-              color: _SessionColors.softGold,
-              fontSize: compact ? 20 : 24,
-              fontWeight: FontWeight.w900,
+            SizedBox(height: compact ? 14 : 22),
+            Text(
+              _weight(set!.weightKg),
+              style: TextStyle(
+                color: _SessionColors.softGold,
+                fontSize: compact ? 20 : 24,
+                fontWeight: FontWeight.w900,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -443,9 +668,17 @@ class _UpNextCard extends StatelessWidget {
 }
 
 class _RestTimer extends StatelessWidget {
-  const _RestTimer({required this.size});
+  const _RestTimer({
+    required this.size,
+    required this.remaining,
+    required this.total,
+    required this.onSkip,
+  });
 
   final double size;
+  final int remaining;
+  final int total;
+  final VoidCallback onSkip;
 
   @override
   Widget build(BuildContext context) {
@@ -459,7 +692,7 @@ class _RestTimer extends StatelessWidget {
             width: size,
             height: size,
             child: CircularProgressIndicator(
-              value: 0.83,
+              value: total == 0 ? 0 : remaining / total,
               strokeWidth: 9,
               backgroundColor: Colors.white.withValues(alpha: 0.08),
               valueColor: const AlwaysStoppedAnimation(_SessionColors.gold),
@@ -476,18 +709,19 @@ class _RestTimer extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text(
-                '00:45',
-                style: TextStyle(
+              const SizedBox(height: 12),
+              Text(
+                _clock(remaining),
+                style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 40,
+                  fontSize: 38,
                   fontWeight: FontWeight.w900,
+                  fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 14),
               OutlinedButton(
-                onPressed: () {},
+                onPressed: onSkip,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _SessionColors.softGold,
                   side: const BorderSide(color: _SessionColors.gold),
@@ -509,32 +743,27 @@ class _RestTimer extends StatelessWidget {
 }
 
 class _WorkoutSets extends StatelessWidget {
-  const _WorkoutSets();
+  const _WorkoutSets({required this.session});
+
+  final WorkoutSessionState session;
 
   @override
   Widget build(BuildContext context) {
-    const rows = [
-      ('1', '20 kg', '12', '60 sec', 'Completed', Icons.check_circle_outline),
-      ('2', '25 kg', '10', '60 sec', 'Completed', Icons.check_circle_outline),
-      ('3', '30 kg', '10', '60 sec', 'In Progress', Icons.play_arrow),
-      ('4', '30 kg', '8', '60 sec', 'Upcoming', Icons.radio_button_unchecked),
-    ];
+    final current = session.currentIndex;
 
     return Column(
       children: [
         Row(
-          children: const [
-            Expanded(child: _SectionTitle('WORKOUT SETS')),
+          children: [
+            const Expanded(child: _SectionTitle('WORKOUT SETS')),
             Text(
-              'Rest Timer: 60 sec',
-              style: TextStyle(
+              'Rest: ${_clock(session.restSeconds)}',
+              style: const TextStyle(
                 color: _SessionColors.softGold,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
               ),
             ),
-            SizedBox(width: 8),
-            Icon(Icons.edit, color: _SessionColors.softGold, size: 22),
           ],
         ),
         const SizedBox(height: 14),
@@ -543,15 +772,28 @@ class _WorkoutSets extends StatelessWidget {
           child: Column(
             children: [
               const _SetRow(
-                values: ['SET', 'WEIGHT', 'REPS', 'REST', 'STATUS'],
+                values: ['SET', 'WEIGHT', 'REPS', 'STATUS'],
                 header: true,
               ),
-              for (final row in rows)
+              for (var i = 0; i < session.sets.length; i++)
                 _SetRow(
-                  values: [row.$1, row.$2, row.$3, row.$4, row.$5],
-                  icon: row.$6,
-                  active: row.$5 == 'In Progress',
-                  complete: row.$5 == 'Completed',
+                  values: [
+                    '${i + 1}',
+                    _weight(session.sets[i].weightKg),
+                    '${session.sets[i].reps}',
+                    session.sets[i].done
+                        ? 'Completed'
+                        : i == current
+                        ? (session.resting ? 'Resting' : 'In Progress')
+                        : 'Upcoming',
+                  ],
+                  icon: session.sets[i].done
+                      ? Icons.check_circle_outline
+                      : i == current
+                      ? Icons.play_arrow
+                      : Icons.radio_button_unchecked,
+                  active: i == current,
+                  complete: session.sets[i].done,
                 ),
             ],
           ),
@@ -562,12 +804,13 @@ class _WorkoutSets extends StatelessWidget {
 }
 
 class _TipsCard extends StatelessWidget {
-  const _TipsCard();
+  const _TipsCard({required this.tip});
+
+  final String tip;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 162,
       padding: const EdgeInsets.fromLTRB(24, 22, 20, 20),
       decoration: _panelDecoration(16),
       child: Row(
@@ -575,15 +818,14 @@ class _TipsCard extends StatelessWidget {
           const Icon(
             Icons.lightbulb_outline,
             color: _SessionColors.softGold,
-            size: 48,
+            size: 44,
           ),
           const SizedBox(width: 20),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
+                const Text(
                   'TIPS',
                   style: TextStyle(
                     color: _SessionColors.softGold,
@@ -591,10 +833,10 @@ class _TipsCard extends StatelessWidget {
                     fontWeight: FontWeight.w900,
                   ),
                 ),
-                SizedBox(height: 12),
+                const SizedBox(height: 10),
                 Text(
-                  'Keep your back against the pad and avoid locking your elbows at the top of the movement.',
-                  style: TextStyle(
+                  tip,
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 15,
                     height: 1.45,
@@ -603,11 +845,6 @@ class _TipsCard extends StatelessWidget {
               ],
             ),
           ),
-          Image.asset(
-            'assets/images/session_tips_muscles.png',
-            width: 175,
-            fit: BoxFit.contain,
-          ),
         ],
       ),
     );
@@ -615,50 +852,150 @@ class _TipsCard extends StatelessWidget {
 }
 
 class _ActionButtons extends StatelessWidget {
-  const _ActionButtons();
+  const _ActionButtons({
+    required this.session,
+    required this.onAdjust,
+    required this.onComplete,
+    required this.onEnd,
+  });
+
+  final WorkoutSessionState session;
+  final VoidCallback onAdjust;
+  final VoidCallback onComplete;
+  final VoidCallback onEnd;
 
   @override
   Widget build(BuildContext context) {
+    final current = session.finished
+        ? null
+        : session.sets[session.currentIndex];
+
     return Row(
       children: [
         Expanded(
           child: _SecondaryButton(
-            icon: Icons.sync,
-            label: 'CHANGE WEIGHT\n30 kg',
+            icon: Icons.tune,
+            label: current == null
+                ? 'ADJUST SET'
+                : 'ADJUST SET\n${_weight(current.weightKg)}',
             color: _SessionColors.softGold,
-            onPressed: () {},
+            onPressed: current == null ? null : onAdjust,
           ),
         ),
-        const SizedBox(width: 18),
+        const SizedBox(width: 12),
         Expanded(
           flex: 2,
           child: SizedBox(
             height: 82,
             child: ElevatedButton.icon(
-              onPressed: () {},
+              onPressed: session.finished || session.resting || session.paused
+                  ? null
+                  : onComplete,
               style: ElevatedButton.styleFrom(
                 backgroundColor: _SessionColors.softGold,
                 foregroundColor: Colors.black,
+                disabledBackgroundColor: Colors.white12,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),
                 ),
               ),
-              icon: const Icon(Icons.check_circle_outline, size: 28),
+              icon: const Icon(Icons.check_circle_outline, size: 26),
               label: const Text(
                 'COMPLETE SET',
-                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
               ),
             ),
           ),
         ),
-        const SizedBox(width: 18),
+        const SizedBox(width: 12),
         Expanded(
           child: _SecondaryButton(
-            icon: Icons.check_circle_outline,
-            label: 'END WORKOUT',
-            color: Color(0xFFFF5A4F),
-            onPressed: () => Navigator.of(context).pop(),
+            icon: Icons.stop_circle_outlined,
+            label: 'END\nWORKOUT',
+            color: const Color(0xFFFF5A4F),
+            onPressed: onEnd,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AdjustSetDialog extends StatefulWidget {
+  const _AdjustSetDialog({required this.set});
+
+  final SessionSet set;
+
+  @override
+  State<_AdjustSetDialog> createState() => _AdjustSetDialogState();
+}
+
+class _AdjustSetDialogState extends State<_AdjustSetDialog> {
+  late final _weightField = TextEditingController(
+    text: widget.set.weightKg == 0 ? '' : _trim(widget.set.weightKg),
+  );
+  late final _reps = TextEditingController(text: '${widget.set.reps}');
+
+  @override
+  void dispose() {
+    _weightField.dispose();
+    _reps.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final weight = double.tryParse(
+      _weightField.text.trim().replaceAll(',', '.'),
+    );
+    final reps = int.tryParse(_reps.text.trim());
+    Navigator.pop(context, (
+      (weight ?? 0).clamp(0, 999).toDouble(),
+      (reps ?? widget.set.reps).clamp(1, 200),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF141414),
+      title: const Text('Adjust set'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _weightField,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+            ],
+            decoration: const InputDecoration(
+              labelText: 'Weight (kg)',
+              helperText: 'Applies to this set and the ones after it',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _reps,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(labelText: 'Reps'),
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _submit,
+          child: const Text(
+            'Save',
+            style: TextStyle(color: _SessionColors.softGold),
           ),
         ),
       ],
@@ -677,30 +1014,39 @@ class _SecondaryButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       height: 82,
-      child: OutlinedButton.icon(
+      child: OutlinedButton(
         onPressed: onPressed,
         style: OutlinedButton.styleFrom(
           foregroundColor: color,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
         ),
-        icon: Icon(icon, size: 28),
-        label: Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontSize: 14,
-            fontWeight: FontWeight.w800,
-            height: 1.3,
-          ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 24),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              style: TextStyle(
+                color: onPressed == null ? Colors.white38 : color,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                height: 1.25,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -729,6 +1075,7 @@ class _SetRow extends StatelessWidget {
         : header
         ? _SessionColors.muted
         : Colors.white;
+    final statusIndex = values.length - 1;
 
     return Container(
       height: header ? 54 : 60,
@@ -744,7 +1091,8 @@ class _SetRow extends StatelessWidget {
         children: [
           for (var i = 0; i < values.length; i++)
             Expanded(
-              child: i == 4 && !header
+              flex: i == statusIndex ? 2 : 1,
+              child: i == statusIndex && !header
                   ? Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -793,8 +1141,8 @@ class _InfoPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.04),
         borderRadius: BorderRadius.circular(14),
@@ -806,9 +1154,9 @@ class _InfoPill extends StatelessWidget {
           Icon(
             icon,
             color: highlighted ? _SessionColors.softGold : _SessionColors.muted,
-            size: 22,
+            size: 20,
           ),
-          const SizedBox(width: 9),
+          const SizedBox(width: 8),
           Text(
             label,
             style: TextStyle(
@@ -839,6 +1187,17 @@ class _SectionTitle extends StatelessWidget {
     );
   }
 }
+
+String _clock(int seconds) {
+  final minutes = seconds ~/ 60;
+  final rest = seconds % 60;
+  return '${minutes.toString().padLeft(2, '0')}:${rest.toString().padLeft(2, '0')}';
+}
+
+String _trim(double value) =>
+    value == value.roundToDouble() ? '${value.round()}' : '$value';
+
+String _weight(double kg) => kg == 0 ? 'Bodyweight' : '${_trim(kg)} kg';
 
 BoxDecoration _panelDecoration(double radius) {
   return BoxDecoration(

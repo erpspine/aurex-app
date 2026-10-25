@@ -1,18 +1,55 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'aurex_http.dart';
-import 'profile.dart';
+import 'api_client.dart';
+import 'providers.dart';
+import 'router.dart';
 
-const String aurexApiBaseUrl = String.fromEnvironment(
-  'AUREX_API_BASE_URL',
-  defaultValue: 'https://api.aurex-performance.com/api',
-);
+/// Shown while the saved session is checked when the app starts.
+class AurexSplashScreen extends ConsumerWidget {
+  const AurexSplashScreen({super.key});
 
-class AurexLoginScreen extends StatefulWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final error = ref.watch(sessionProvider).error;
+
+    return Scaffold(
+      backgroundColor: AurexLoginScreen.black,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.asset('assets/images/placeholder.png', width: 200),
+              const SizedBox(height: 32),
+              if (error == null)
+                const CircularProgressIndicator(color: AurexLoginScreen.gold)
+              else ...[
+                Text(
+                  error.toString(),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+                const SizedBox(height: 16),
+                OutlinedButton(
+                  onPressed: () => ref.invalidate(sessionProvider),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AurexLoginScreen extends ConsumerStatefulWidget {
   const AurexLoginScreen({super.key});
 
   static const Color black = Color(0xFF030303);
@@ -23,10 +60,10 @@ class AurexLoginScreen extends StatefulWidget {
   static const Color mutedText = Color(0xFFA6A6A6);
 
   @override
-  State<AurexLoginScreen> createState() => _AurexLoginScreenState();
+  ConsumerState<AurexLoginScreen> createState() => _AurexLoginScreenState();
 }
 
-class _AurexLoginScreenState extends State<AurexLoginScreen> {
+class _AurexLoginScreenState extends ConsumerState<AurexLoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -53,29 +90,21 @@ class _AurexLoginScreenState extends State<AurexLoginScreen> {
     final password = _passwordController.text;
 
     try {
-      final session = await AurexAuthApi.login(
-        email: email,
-        password: password,
-      );
+      final session = await ref
+          .read(apiClientProvider)
+          .login(email: email, password: password);
 
-      if (!mounted) return;
-
-      AurexSession.current = session;
-
-      Navigator.of(
-        context,
-      ).pushReplacement(MaterialPageRoute(builder: (_) => const ProfilePage()));
-    } on AurexAuthException catch (error) {
+      // The router redirects to the home tab once the session is stored.
+      await ref.read(sessionProvider.notifier).signIn(session);
+    } on AurexApiException catch (error) {
       if (!mounted) return;
 
       if (error.verificationRequired) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => AurexEmailVerificationScreen(
-              email: email,
-              initialMessage: error.message,
-              retryAfter: error.retryAfter,
-            ),
+        await context.push(
+          AurexRoutes.withEmail(AurexRoutes.verifyEmail, email),
+          extra: AuthScreenExtra(
+            message: error.message,
+            retryAfter: error.retryAfter,
           ),
         );
         return;
@@ -265,13 +294,7 @@ class _LoginPanel extends StatelessWidget {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const AurexForgotPasswordScreen(),
-                    ),
-                  );
-                },
+                onPressed: () => context.push(AurexRoutes.forgotPassword),
                 style: TextButton.styleFrom(
                   foregroundColor: AurexLoginScreen.gold,
                   padding: EdgeInsets.zero,
@@ -312,13 +335,7 @@ class _LoginPanel extends StatelessWidget {
               child: TextButton(
                 onPressed: isSubmitting
                     ? null
-                    : () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const AurexSignUpScreen(),
-                          ),
-                        );
-                      },
+                    : () => context.push(AurexRoutes.signUp),
                 style: TextButton.styleFrom(
                   foregroundColor: AurexLoginScreen.mutedText,
                 ),
@@ -346,14 +363,14 @@ class _LoginPanel extends StatelessWidget {
   }
 }
 
-class AurexSignUpScreen extends StatefulWidget {
+class AurexSignUpScreen extends ConsumerStatefulWidget {
   const AurexSignUpScreen({super.key});
 
   @override
-  State<AurexSignUpScreen> createState() => _AurexSignUpScreenState();
+  ConsumerState<AurexSignUpScreen> createState() => _AurexSignUpScreenState();
 }
 
-class _AurexSignUpScreenState extends State<AurexSignUpScreen> {
+class _AurexSignUpScreenState extends ConsumerState<AurexSignUpScreen> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _email = TextEditingController();
@@ -376,19 +393,21 @@ class _AurexSignUpScreenState extends State<AurexSignUpScreen> {
     setState(() => _isSubmitting = true);
     final email = _email.text.trim();
     try {
-      final result = await AurexAuthApi.register(
-        name: _name.text.trim(),
-        email: email,
-        password: _password.text,
-        confirmation: _confirmation.text,
-      );
+      final result = await ref
+          .read(apiClientProvider)
+          .register(
+            name: _name.text.trim(),
+            email: email,
+            password: _password.text,
+            confirmation: _confirmation.text,
+          );
       if (!mounted) return;
       _openVerification(
         email,
         result['message'] as String?,
         result['retry_after'] as int? ?? 60,
       );
-    } on AurexAuthException catch (error) {
+    } on AurexApiException catch (error) {
       if (!mounted) return;
       if (error.verificationRequired) {
         _openVerification(email, error.message, error.retryAfter);
@@ -405,14 +424,9 @@ class _AurexSignUpScreenState extends State<AurexSignUpScreen> {
   void _openVerification(String email, String? message, int retryAfter) {
     _password.clear();
     _confirmation.clear();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => AurexEmailVerificationScreen(
-          email: email,
-          initialMessage: message,
-          retryAfter: retryAfter,
-        ),
-      ),
+    context.pushReplacement(
+      AurexRoutes.withEmail(AurexRoutes.verifyEmail, email),
+      extra: AuthScreenExtra(message: message, retryAfter: retryAfter),
     );
   }
 
@@ -548,7 +562,7 @@ class _AurexSignUpScreenState extends State<AurexSignUpScreen> {
                     TextButton(
                       onPressed: _isSubmitting
                           ? null
-                          : () => Navigator.of(context).pop(),
+                          : () => popOrGo(context, AurexRoutes.login),
                       style: TextButton.styleFrom(
                         foregroundColor: AurexLoginScreen.softGold,
                       ),
@@ -565,15 +579,16 @@ class _AurexSignUpScreenState extends State<AurexSignUpScreen> {
   }
 }
 
-class AurexForgotPasswordScreen extends StatefulWidget {
+class AurexForgotPasswordScreen extends ConsumerStatefulWidget {
   const AurexForgotPasswordScreen({super.key});
 
   @override
-  State<AurexForgotPasswordScreen> createState() =>
+  ConsumerState<AurexForgotPasswordScreen> createState() =>
       _AurexForgotPasswordScreenState();
 }
 
-class _AurexForgotPasswordScreenState extends State<AurexForgotPasswordScreen> {
+class _AurexForgotPasswordScreenState
+    extends ConsumerState<AurexForgotPasswordScreen> {
   final _email = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _busy = false;
@@ -588,22 +603,22 @@ class _AurexForgotPasswordScreenState extends State<AurexForgotPasswordScreen> {
     if (_formKey.currentState?.validate() != true) return;
     setState(() => _busy = true);
     try {
-      final result = await AurexAuthApi.forgotPassword(_email.text.trim());
+      final email = _email.text.trim();
+      final result = await ref.read(apiClientProvider).forgotPassword(email);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => AurexPasswordResetScreen(
-            email: _email.text.trim(),
-            initialMessage: result['message'] as String?,
-            retryAfter: result['retry_after'] as int? ?? 60,
-          ),
+      context.pushReplacement(
+        AurexRoutes.withEmail(AurexRoutes.resetPassword, email),
+        extra: AuthScreenExtra(
+          message: result['message'] as String?,
+          retryAfter: result['retry_after'] as int? ?? 60,
         ),
       );
-    } on AurexAuthException catch (error) {
-      if (mounted)
+    } on AurexApiException catch (error) {
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -662,7 +677,7 @@ class _AurexForgotPasswordScreenState extends State<AurexForgotPasswordScreen> {
             child: Text(_busy ? 'SENDING...' : 'SEND RESET CODE'),
           ),
           TextButton(
-            onPressed: _busy ? null : () => Navigator.of(context).pop(),
+            onPressed: _busy ? null : () => popOrGo(context, AurexRoutes.login),
             style: TextButton.styleFrom(
               foregroundColor: AurexLoginScreen.softGold,
             ),
@@ -674,7 +689,7 @@ class _AurexForgotPasswordScreenState extends State<AurexForgotPasswordScreen> {
   );
 }
 
-class AurexPasswordResetScreen extends StatefulWidget {
+class AurexPasswordResetScreen extends ConsumerStatefulWidget {
   const AurexPasswordResetScreen({
     super.key,
     required this.email,
@@ -685,11 +700,12 @@ class AurexPasswordResetScreen extends StatefulWidget {
   final String? initialMessage;
   final int retryAfter;
   @override
-  State<AurexPasswordResetScreen> createState() =>
+  ConsumerState<AurexPasswordResetScreen> createState() =>
       _AurexPasswordResetScreenState();
 }
 
-class _AurexPasswordResetScreenState extends State<AurexPasswordResetScreen> {
+class _AurexPasswordResetScreenState
+    extends ConsumerState<AurexPasswordResetScreen> {
   final _formKey = GlobalKey<FormState>();
   final _code = TextEditingController();
   final _password = TextEditingController();
@@ -697,7 +713,7 @@ class _AurexPasswordResetScreenState extends State<AurexPasswordResetScreen> {
   Timer? _timer;
   int _cooldown = 0;
   bool _busy = false;
-  bool _showPassword = false;
+  final bool _showPassword = false;
   String? _message;
   String? _resetToken;
 
@@ -735,16 +751,18 @@ class _AurexPasswordResetScreenState extends State<AurexPasswordResetScreen> {
     }
     setState(() => _busy = true);
     try {
-      final result = await AurexAuthApi.verifyPasswordCode(
-        widget.email,
-        _code.text.trim(),
-      );
-      if (mounted)
+      final result = await ref
+          .read(apiClientProvider)
+          .verifyPasswordCode(widget.email, _code.text.trim());
+      if (mounted) {
         setState(() {
-          _resetToken = result['reset_token'] as String;
-          _message = result['message'] as String?;
+          _resetToken = result['reset_token'] as String?;
+          _message = _resetToken == null
+              ? 'The server did not return a reset token. Request a new code.'
+              : result['message'] as String?;
         });
-    } on AurexAuthException catch (error) {
+      }
+    } on AurexApiException catch (error) {
       if (mounted) setState(() => _message = error.message);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -754,12 +772,14 @@ class _AurexPasswordResetScreenState extends State<AurexPasswordResetScreen> {
   Future<void> _resend() async {
     setState(() => _busy = true);
     try {
-      final result = await AurexAuthApi.forgotPassword(widget.email);
+      final result = await ref
+          .read(apiClientProvider)
+          .forgotPassword(widget.email);
       if (mounted) {
         setState(() => _message = result['message'] as String?);
         _startCooldown(result['retry_after'] as int? ?? 60);
       }
-    } on AurexAuthException catch (error) {
+    } on AurexApiException catch (error) {
       if (mounted) setState(() => _message = error.message);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -767,25 +787,28 @@ class _AurexPasswordResetScreenState extends State<AurexPasswordResetScreen> {
   }
 
   Future<void> _reset() async {
-    if (_formKey.currentState?.validate() != true || _resetToken == null)
+    if (_formKey.currentState?.validate() != true || _resetToken == null) {
       return;
+    }
     setState(() => _busy = true);
     try {
-      await AurexAuthApi.resetPassword(
-        widget.email,
-        _resetToken!,
-        _password.text,
-        _confirmation.text,
-      );
+      await ref
+          .read(apiClientProvider)
+          .resetPassword(
+            widget.email,
+            _resetToken!,
+            _password.text,
+            _confirmation.text,
+          );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Password changed. You can now log in.'),
           ),
         );
-        Navigator.of(context).popUntil((route) => route.isFirst);
+        context.go(AurexRoutes.login);
       }
-    } on AurexAuthException catch (error) {
+    } on AurexApiException catch (error) {
       if (mounted) setState(() => _message = error.message);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -930,7 +953,7 @@ class _AuthSimpleScaffold extends StatelessWidget {
   );
 }
 
-class AurexEmailVerificationScreen extends StatefulWidget {
+class AurexEmailVerificationScreen extends ConsumerStatefulWidget {
   const AurexEmailVerificationScreen({
     super.key,
     required this.email,
@@ -943,12 +966,12 @@ class AurexEmailVerificationScreen extends StatefulWidget {
   final int retryAfter;
 
   @override
-  State<AurexEmailVerificationScreen> createState() =>
+  ConsumerState<AurexEmailVerificationScreen> createState() =>
       _AurexEmailVerificationScreenState();
 }
 
 class _AurexEmailVerificationScreenState
-    extends State<AurexEmailVerificationScreen> {
+    extends ConsumerState<AurexEmailVerificationScreen> {
   final _formKey = GlobalKey<FormState>();
   final _code = TextEditingController();
   Timer? _timer;
@@ -994,14 +1017,16 @@ class _AurexEmailVerificationScreenState
       _hasError = false;
     });
     try {
-      await AurexAuthApi.verifyEmail(widget.email, _code.text.trim());
+      await ref
+          .read(apiClientProvider)
+          .verifyEmail(widget.email, _code.text.trim());
       if (!mounted) return;
       _timer?.cancel();
       setState(() {
         _verified = true;
         _code.clear();
       });
-    } on AurexAuthException catch (error) {
+    } on AurexApiException catch (error) {
       if (mounted) {
         setState(() {
           _message = error.message;
@@ -1020,14 +1045,14 @@ class _AurexEmailVerificationScreenState
       _hasError = false;
     });
     try {
-      final result = await AurexAuthApi.resendCode(widget.email);
+      final result = await ref.read(apiClientProvider).resendCode(widget.email);
       if (!mounted) return;
       setState(() {
         _message = result['message'] as String?;
         _code.clear();
         _startCooldown(result['retry_after'] as int? ?? 60);
       });
-    } on AurexAuthException catch (error) {
+    } on AurexApiException catch (error) {
       if (mounted) {
         setState(() {
           _message = error.message;
@@ -1165,7 +1190,7 @@ class _AurexEmailVerificationScreenState
                     TextButton(
                       onPressed: _busy
                           ? null
-                          : () => Navigator.of(context).pop(),
+                          : () => context.go(AurexRoutes.login),
                       style: TextButton.styleFrom(
                         foregroundColor: AurexLoginScreen.softGold,
                       ),
@@ -1180,194 +1205,6 @@ class _AurexEmailVerificationScreenState
       ),
     );
   }
-}
-
-class AurexSession {
-  const AurexSession({required this.token, required this.user, this.member});
-
-  final String token;
-  final Map<String, dynamic> user;
-  final Map<String, dynamic>? member;
-
-  static AurexSession? current;
-
-  bool get isMember {
-    final role = '${user['role'] ?? ''}'.trim().toLowerCase();
-    final userType = '${user['user_type'] ?? ''}'.trim().toLowerCase();
-
-    return role == 'member' || userType == 'member';
-  }
-}
-
-class AurexAuthApi {
-  static Future<Map<String, dynamic>> forgotPassword(String email) =>
-      _post('/password/forgot', {'email': email});
-
-  static Future<Map<String, dynamic>> verifyPasswordCode(
-    String email,
-    String code,
-  ) => _post('/password/verify', {'email': email, 'code': code});
-
-  static Future<Map<String, dynamic>> resetPassword(
-    String email,
-    String token,
-    String password,
-    String confirmation,
-  ) => _post('/password/reset', {
-    'email': email,
-    'reset_token': token,
-    'password': password,
-    'password_confirmation': confirmation,
-  });
-
-  static Future<Map<String, dynamic>> register({
-    required String name,
-    required String email,
-    required String password,
-    required String confirmation,
-  }) => _post('/register', {
-    'name': name,
-    'email': email,
-    'password': password,
-    'password_confirmation': confirmation,
-  });
-
-  static Future<Map<String, dynamic>> verifyEmail(String email, String code) =>
-      _post('/email/verify', {'email': email, 'code': code});
-
-  static Future<Map<String, dynamic>> resendCode(String email) =>
-      _post('/email/resend', {'email': email});
-
-  static Future<Map<String, dynamic>> _post(
-    String path,
-    Map<String, String> body,
-  ) async {
-    try {
-      final response = await aurexPostJson(
-        Uri.parse('$aurexApiBaseUrl$path'),
-        headers: const {'Accept': 'application/json'},
-        body: jsonEncode(body),
-      ).timeout(const Duration(seconds: 30));
-      final payload = _payloadFrom(response);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw AurexAuthException(
-          _messageFrom(payload),
-          verificationRequired: payload['verification_required'] == true,
-          retryAfter: payload['retry_after'] is int
-              ? payload['retry_after'] as int
-              : 0,
-        );
-      }
-      return payload;
-    } on TimeoutException {
-      throw const AurexAuthException(
-        'The request timed out. Please try again. If your account was created, log in to continue verification.',
-      );
-    } on AurexNetworkException {
-      throw const AurexAuthException(
-        'Unable to reach the AUREX server. Check your connection.',
-      );
-    } on FormatException {
-      throw const AurexAuthException(
-        'The server returned an invalid response.',
-      );
-    }
-  }
-
-  static Future<AurexSession> login({
-    required String email,
-    required String password,
-  }) async {
-    try {
-      final payload = await _post('/login', {
-        'email': email,
-        'password': password,
-      });
-
-      final token = payload['token'];
-      final user = payload['user'];
-
-      if (token is! String || token.isEmpty || user is! Map) {
-        throw const AurexAuthException(
-          'The server returned an incomplete login response.',
-        );
-      }
-
-      return AurexSession(
-        token: token,
-        user: Map<String, dynamic>.from(user),
-        member: payload['member'] is Map
-            ? Map<String, dynamic>.from(payload['member'] as Map)
-            : null,
-      );
-    } on AurexNetworkException {
-      throw const AurexAuthException(
-        'Unable to reach the AUREX server. Check your connection.',
-      );
-    } on FormatException {
-      throw const AurexAuthException(
-        'The server returned an invalid response.',
-      );
-    }
-  }
-
-  static Map<String, dynamic> _payloadFrom(AurexHttpResponse response) {
-    final responseBody = response.body.trim();
-
-    if (responseBody.isEmpty) {
-      if (response.statusCode >= 500) {
-        throw AurexAuthException(
-          'Server error ${response.statusCode}. Please contact support.',
-        );
-      }
-
-      throw const FormatException();
-    }
-
-    try {
-      final decoded = jsonDecode(responseBody);
-
-      if (decoded is Map) {
-        return Map<String, dynamic>.from(decoded);
-      }
-    } on FormatException {
-      if (response.statusCode >= 500) {
-        throw AurexAuthException(
-          'Server error ${response.statusCode}. Please contact support.',
-        );
-      }
-
-      rethrow;
-    }
-
-    throw const FormatException();
-  }
-
-  static String _messageFrom(Map<String, dynamic> payload) {
-    final errors = payload['errors'];
-
-    if (errors is Map && errors.isNotEmpty) {
-      final firstError = errors.values.first;
-
-      if (firstError is List && firstError.isNotEmpty) {
-        return firstError.first.toString();
-      }
-    }
-
-    return payload['message']?.toString() ?? 'Unable to complete the request.';
-  }
-}
-
-class AurexAuthException implements Exception {
-  const AurexAuthException(
-    this.message, {
-    this.verificationRequired = false,
-    this.retryAfter = 0,
-  });
-
-  final String message;
-  final bool verificationRequired;
-  final int retryAfter;
 }
 
 class _InputField extends StatelessWidget {

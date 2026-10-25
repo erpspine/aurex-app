@@ -1,215 +1,136 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'api_client.dart';
-import 'bottom_nav.dart';
-import 'exercise_list.dart';
-import 'workouts.dart';
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
 const _aurexPlaceholderAsset = 'assets/images/placeholder.png';
 
-class AurexLandingScreen extends StatefulWidget {
-  const AurexLandingScreen({super.key});
+/// Body parts and equipment the gym catalogue is organised by. The artwork
+/// already contains the label, so tiles do not draw a title on top.
+const aurexBodyParts = [
+  ('Chest', 'assets/images/body_chest.png'),
+  ('Back', 'assets/images/body_back.png'),
+  ('Shoulders', 'assets/images/body_shoulders.png'),
+  ('Arms', 'assets/images/body_arms.png'),
+  ('Legs', 'assets/images/body_legs.png'),
+  ('Abs', 'assets/images/body_abs.png'),
+];
 
-  @override
-  State<AurexLandingScreen> createState() => _AurexLandingScreenState();
+const aurexEquipment = [
+  ('Dumbbell', 'assets/images/equip_dumbbell.png'),
+  ('Barbell', 'assets/images/equip_barbell.png'),
+  ('Kettlebell', 'assets/images/equip_kettlebell.png'),
+  ('Resistance Band', 'assets/images/equip_band.png'),
+  ('Machine', 'assets/images/equip_machine.png'),
+];
+
+/// Artwork for an equipment name from the API, matched by keyword.
+String? equipmentArtwork(String name) {
+  final normalized = name.toLowerCase();
+  for (final (label, asset) in aurexEquipment) {
+    if (normalized.contains(label.toLowerCase().split(' ').last) ||
+        label.toLowerCase().contains(normalized)) {
+      return asset;
+    }
+  }
+  return null;
 }
 
-class _AurexLandingScreenState extends State<AurexLandingScreen> {
-  late Future<List<MobileAppBanner>> _bannersFuture;
-  late Future<List<MobileExercise>> _exercisesFuture;
-  late Future<List<MobileEquipment>> _equipmentFuture;
-  late Future<List<MobileWorkout>> _workoutsFuture;
-  late Future<List<MobileWorkoutLevel>> _levelsFuture;
+class AurexLandingScreen extends ConsumerWidget {
+  const AurexLandingScreen({super.key});
 
-  static const _bodyParts = [
-    _ImageTileData('Chest', _aurexPlaceholderAsset, true),
-    _ImageTileData('Back', _aurexPlaceholderAsset, false),
-    _ImageTileData('Shoulders', _aurexPlaceholderAsset, false),
-    _ImageTileData('Arms', _aurexPlaceholderAsset, false),
-    _ImageTileData('Legs', _aurexPlaceholderAsset, false),
-    _ImageTileData('Abs', _aurexPlaceholderAsset, false),
-  ];
-
-  static const _equipment = [
-    _ImageTileData('Dumbbell', _aurexPlaceholderAsset, false),
-    _ImageTileData('Barbell', _aurexPlaceholderAsset, false),
-    _ImageTileData('Kettlebell', _aurexPlaceholderAsset, false),
-    _ImageTileData('Resistance Band', _aurexPlaceholderAsset, false),
-    _ImageTileData('Machine', _aurexPlaceholderAsset, false),
-  ];
-
-  static const _workouts = [
-    _WorkoutData('Full Body\nStrength', _aurexPlaceholderAsset),
-    _WorkoutData('Upper Body\nPower', _aurexPlaceholderAsset),
-    _WorkoutData('Lower Body\nBurn', _aurexPlaceholderAsset),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _assignLandingDataFutures();
-  }
-
-  Future<void> _refreshLandingData() async {
-    setState(() {
-      _assignLandingDataFutures(forceRefresh: true);
-    });
+  Future<void> _refresh(WidgetRef ref) async {
+    // Each section shows its own error state, so failures are ignored here.
+    Future<void> settle(Future<Object?> future) =>
+        future.then((_) {}, onError: (_) {});
 
     await Future.wait([
-      _ignoreErrors(_bannersFuture),
-      _ignoreErrors(_exercisesFuture),
-      _ignoreErrors(_equipmentFuture),
-      _ignoreErrors(_workoutsFuture),
-      _ignoreErrors(_levelsFuture),
+      settle(ref.refresh(homeBannersProvider.future)),
+      settle(ref.refresh(equipmentProvider.future)),
+      settle(ref.refresh(workoutsProvider.future)),
+      settle(ref.refresh(workoutLevelsProvider.future)),
     ]);
   }
 
-  void _assignLandingDataFutures({bool forceRefresh = false}) {
-    _bannersFuture = AurexApiClient.fetchHomeBanners(
-      forceRefresh: forceRefresh,
-    );
-    _exercisesFuture = AurexApiClient.fetchExercises(
-      forceRefresh: forceRefresh,
-    );
-    _equipmentFuture = AurexApiClient.fetchEquipment(
-      forceRefresh: forceRefresh,
-    );
-    _workoutsFuture = AurexApiClient.fetchWorkouts(forceRefresh: forceRefresh);
-    _levelsFuture = AurexApiClient.fetchWorkoutLevels(
-      forceRefresh: forceRefresh,
-    );
-  }
-
-  Future<void> _ignoreErrors<T>(Future<List<T>> future) async {
-    try {
-      await future;
-    } catch (_) {}
-  }
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: _LandingColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
-          children: [
-            RefreshIndicator(
-              color: _LandingColors.softGold,
-              backgroundColor: _LandingColors.black,
-              onRefresh: _refreshLandingData,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.only(bottom: 116),
-                children: [
-                  _HeroSection(bannersFuture: _bannersFuture),
-                  const SizedBox(height: 8),
-                  _SectionHeader(
-                    title: 'BODY PART EXERCISES',
-                    onSeeAll: () => _openBodyPartList(context),
-                  ),
-                  _BodyPartTiles(
-                    exercisesFuture: _exercisesFuture,
-                    fallbackItems: _bodyParts,
-                    width: 142,
-                    onTap: () => _openBodyPartList(context),
-                  ),
-                  const SizedBox(height: 28),
-                  _SectionHeader(
-                    title: 'EQUIPMENT BASED EXERCISES',
-                    onSeeAll: () => _openEquipmentList(context),
-                  ),
-                  _EquipmentTiles(
-                    equipmentFuture: _equipmentFuture,
-                    fallbackItems: _equipment,
-                    width: 154,
-                    onTap: () => _openEquipmentList(context),
-                  ),
-                  const SizedBox(height: 28),
-                  _SectionHeader(
-                    title: 'WORKOUTS',
-                    onSeeAll: () => _openWorkouts(context),
-                  ),
-                  _WorkoutList(
-                    workoutsFuture: _workoutsFuture,
-                    fallbackItems: _workouts,
-                  ),
-                  const SizedBox(height: 28),
-                  const _SectionHeader(
-                    title: 'WORKOUT LEVELS',
-                    showSeeAll: false,
-                  ),
-                  _WorkoutLevelTiles(levelsFuture: _levelsFuture, width: 200),
+        child: RefreshIndicator(
+          color: _LandingColors.softGold,
+          backgroundColor: _LandingColors.black,
+          onRefresh: () => _refresh(ref),
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.only(bottom: 116),
+            children: [
+              const _HeroSection(),
+              const SizedBox(height: 8),
+              _SectionHeader(
+                title: 'BODY PART EXERCISES',
+                onSeeAll: () => context.push(AurexRoutes.bodyParts),
+              ),
+              _HorizontalImageTiles(
+                width: 142,
+                showTitle: false,
+                items: [
+                  for (final (name, asset) in aurexBodyParts)
+                    _ImageTileData(
+                      name,
+                      asset,
+                      onTap: () => context.push(
+                        AurexRoutes.exerciseGroup('Body Part', name),
+                      ),
+                    ),
                 ],
               ),
-            ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(homeIsRoot: true),
-            ),
-          ],
+              const SizedBox(height: 28),
+              _SectionHeader(
+                title: 'EQUIPMENT BASED EXERCISES',
+                onSeeAll: () => context.push(AurexRoutes.equipment),
+              ),
+              const _EquipmentTiles(width: 154),
+              const SizedBox(height: 28),
+              _SectionHeader(
+                title: 'WORKOUTS',
+                onSeeAll: () => context.go(AurexRoutes.workouts),
+              ),
+              const _WorkoutList(),
+              const SizedBox(height: 28),
+              const _SectionHeader(title: 'WORKOUT LEVELS', showSeeAll: false),
+              const _WorkoutLevelTiles(width: 200),
+            ],
+          ),
         ),
       ),
     );
   }
-
-  void _openBodyPartList(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const ExerciseListPage.bodyParts()),
-    );
-  }
-
-  void _openEquipmentList(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const ExerciseListPage.equipment()),
-    );
-  }
-
-  void _openWorkouts(BuildContext context) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const WorkoutsPage()));
-  }
 }
 
-class _HeroSection extends StatefulWidget {
-  const _HeroSection({required this.bannersFuture});
-
-  final Future<List<MobileAppBanner>> bannersFuture;
+class _HeroSection extends ConsumerWidget {
+  const _HeroSection();
 
   @override
-  State<_HeroSection> createState() => _HeroSectionState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final slides = (ref.watch(homeBannersProvider).value ?? const [])
+        .map(_HeroSlideData.fromBanner)
+        .toList();
 
-class _HeroSectionState extends State<_HeroSection> {
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<MobileAppBanner>>(
-      future: widget.bannersFuture,
-      builder: (context, snapshot) {
-        if (!snapshot.hasData &&
-            snapshot.connectionState != ConnectionState.done) {
-          return const _HeroLoadingState();
-        }
+    if (slides.isEmpty) {
+      return const _HeroLoadingState();
+    }
 
-        final banners = snapshot.data ?? const <MobileAppBanner>[];
-        final slides = banners.map(_HeroSlideData.fromBanner).toList();
-
-        if (slides.isEmpty) {
-          return const _HeroLoadingState();
-        }
-
-        return _HeroCarousel(
-          key: ValueKey(slides.map((slide) => slide.identity).join('|')),
-          slides: slides,
-        );
-      },
+    return _HeroCarousel(
+      key: ValueKey(slides.map((slide) => slide.identity).join('|')),
+      slides: slides,
     );
   }
 }
@@ -458,147 +379,78 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _BodyPartTiles extends StatelessWidget {
-  const _BodyPartTiles({
-    required this.exercisesFuture,
-    required this.fallbackItems,
-    required this.width,
-    required this.onTap,
-  });
+class _EquipmentTiles extends ConsumerWidget {
+  const _EquipmentTiles({required this.width});
 
-  final Future<List<MobileExercise>> exercisesFuture;
-  final List<_ImageTileData> fallbackItems;
   final double width;
-  final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<MobileExercise>>(
-      future: exercisesFuture,
-      builder: (context, snapshot) {
-        final exercises =
-            snapshot.data
-                ?.where(
-                  (exercise) =>
-                      exercise.isPublishedMobile &&
-                      exercise.category.toLowerCase().contains('body part'),
-                )
-                .toList() ??
-            const <MobileExercise>[];
-        final items = exercises.isEmpty
-            ? fallbackItems
-            : exercises
-                  .take(8)
-                  .map(
-                    (exercise) => _ImageTileData(
-                      exercise.name,
-                      _aurexPlaceholderAsset,
-                      false,
-                      exercise.imageUrl,
-                    ),
-                  )
-                  .toList();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final equipment = ref.watch(equipmentProvider).value ?? const [];
 
-        return _HorizontalImageTiles(
-          items: items,
-          width: width,
-          showTitle: false,
-          onTap: onTap,
-        );
-      },
+    // Prefer the gym's own equipment list; fall back to the standard groups.
+    final names = equipment.isEmpty
+        ? [for (final (name, _) in aurexEquipment) name]
+        : equipment.map((item) => item.name).toSet().take(10).toList();
+
+    return _HorizontalImageTiles(
+      width: width,
+      showTitle: false,
+      items: [
+        for (final name in names)
+          _ImageTileData(
+            name,
+            equipmentArtwork(name) ?? _aurexPlaceholderAsset,
+            onTap: () =>
+                context.push(AurexRoutes.exerciseGroup('Equipment', name)),
+          ),
+      ],
     );
   }
 }
 
-class _EquipmentTiles extends StatelessWidget {
-  const _EquipmentTiles({
-    required this.equipmentFuture,
-    required this.fallbackItems,
-    required this.width,
-    required this.onTap,
-  });
+class _WorkoutLevelTiles extends ConsumerWidget {
+  const _WorkoutLevelTiles({required this.width});
 
-  final Future<List<MobileEquipment>> equipmentFuture;
-  final List<_ImageTileData> fallbackItems;
   final double width;
-  final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<MobileEquipment>>(
-      future: equipmentFuture,
-      builder: (context, snapshot) {
-        final equipment =
-            snapshot.data?.where((item) => item.isPublishedMobile).toList() ??
-            const <MobileEquipment>[];
-        final items = equipment.isEmpty
-            ? fallbackItems
-            : equipment
-                  .take(8)
-                  .map(
-                    (item) => _ImageTileData(
-                      item.name,
-                      _aurexPlaceholderAsset,
-                      false,
-                    ),
-                  )
-                  .toList();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final levels = ref.watch(workoutLevelsProvider).value ?? const [];
 
-        return _HorizontalImageTiles(
-          items: items,
-          width: width,
-          showTitle: false,
-          onTap: onTap,
-        );
-      },
+    if (levels.isEmpty) {
+      return _HorizontalImageTilePlaceholders(width: width);
+    }
+
+    return _HorizontalImageTiles(
+      width: width,
+      imageFit: BoxFit.contain,
+      showTitle: false,
+      items: [
+        for (final level in levels)
+          _ImageTileData(
+            level.name,
+            _levelArtwork(level.name),
+            imageUrl: level.coverImageUrl,
+            onTap: () => context.go(
+              Uri(
+                path: AurexRoutes.workouts,
+                queryParameters: {'level': level.name},
+              ).toString(),
+            ),
+          ),
+      ],
     );
   }
-}
 
-class _WorkoutLevelTiles extends StatelessWidget {
-  const _WorkoutLevelTiles({required this.levelsFuture, required this.width});
-
-  final Future<List<MobileWorkoutLevel>> levelsFuture;
-  final double width;
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<MobileWorkoutLevel>>(
-      future: levelsFuture,
-      builder: (context, snapshot) {
-        if (!snapshot.hasData &&
-            snapshot.connectionState != ConnectionState.done) {
-          return _HorizontalImageTilePlaceholders(width: width);
-        }
-
-        final levels =
-            snapshot.data?.where((level) => level.isPublishedMobile).toList() ??
-            const <MobileWorkoutLevel>[];
-
-        if (levels.isEmpty) {
-          return _HorizontalImageTilePlaceholders(width: width);
-        }
-
-        final items = levels
-            .map(
-              (level) => _ImageTileData(
-                level.name,
-                _aurexPlaceholderAsset,
-                false,
-                level.coverImageUrl,
-              ),
-            )
-            .toList();
-
-        return _HorizontalImageTiles(
-          items: items,
-          width: width,
-          imageFit: BoxFit.contain,
-          showTitle: false,
-          allowAssetFallback: true,
-        );
-      },
-    );
+  static String _levelArtwork(String name) {
+    final normalized = name.toLowerCase();
+    for (final level in ['beginner', 'intermediate', 'advanced', 'elite']) {
+      if (normalized.contains(level)) {
+        return 'assets/images/level_$level.png';
+      }
+    }
+    return _aurexPlaceholderAsset;
   }
 }
 
@@ -608,16 +460,12 @@ class _HorizontalImageTiles extends StatelessWidget {
     required this.width,
     this.imageFit = BoxFit.cover,
     this.showTitle = true,
-    this.allowAssetFallback = true,
-    this.onTap,
   });
 
   final List<_ImageTileData> items;
   final double width;
   final BoxFit imageFit;
   final bool showTitle;
-  final bool allowAssetFallback;
-  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -630,63 +478,148 @@ class _HorizontalImageTiles extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(width: 14),
         itemBuilder: (context, index) {
           final item = items[index];
-          return GestureDetector(
-            onTap: onTap,
-            child: SizedBox(
-              width: width,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: item.highlight
-                        ? _LandingColors.softGold
-                        : Colors.white.withValues(alpha: 0.22),
-                    width: item.highlight ? 1.5 : 1,
+          return Semantics(
+            button: item.onTap != null,
+            label: item.title,
+            child: GestureDetector(
+              onTap: item.onTap,
+              child: SizedBox(
+                width: width,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.22),
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(11),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _RemoteOrAssetImage(
+                          imageUrl: item.imageUrl,
+                          asset: item.image,
+                          fit: imageFit,
+                        ),
+                        if (showTitle) ...[
+                          Positioned.fill(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.transparent,
+                                    Colors.black.withValues(alpha: 0.72),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: 12,
+                            right: 12,
+                            bottom: 12,
+                            child: Text(
+                              item.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                height: 1.05,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _WorkoutList extends ConsumerWidget {
+  const _WorkoutList();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workoutsAsync = ref.watch(workoutsProvider);
+    final workouts = workoutsAsync.value;
+
+    if (workouts == null) {
+      return workoutsAsync.hasError
+          ? _InlineMessage(
+              message: workoutsAsync.error.toString(),
+              onRetry: () => ref.invalidate(workoutsProvider),
+            )
+          : const _HorizontalImageTilePlaceholders(width: 278, height: 164);
+    }
+
+    if (workouts.isEmpty) {
+      return const _InlineMessage(message: 'No workouts published yet.');
+    }
+
+    return SizedBox(
+      height: 164,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        scrollDirection: Axis.horizontal,
+        itemCount: workouts.length.clamp(0, 8),
+        separatorBuilder: (context, index) => const SizedBox(width: 16),
+        itemBuilder: (context, index) {
+          final workout = workouts[index];
+          return Semantics(
+            button: true,
+            label: workout.name,
+            child: GestureDetector(
+              onTap: () => context.push(AurexRoutes.workout(workout.id)),
+              child: SizedBox(
+                width: 278,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(11),
+                  borderRadius: BorderRadius.circular(12),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
                       _RemoteOrAssetImage(
-                        imageUrl: item.imageUrl,
-                        asset: item.image,
-                        fit: imageFit,
-                        allowAssetFallback: allowAssetFallback,
+                        imageUrl: workout.coverImageUrl,
+                        asset: 'assets/images/workouts_program_push.png',
                       ),
-                      if (showTitle) ...[
-                        Positioned.fill(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.transparent,
-                                  Colors.black.withValues(alpha: 0.72),
-                                ],
-                              ),
-                            ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.black.withValues(alpha: 0.75),
+                            ],
                           ),
                         ),
-                        Positioned(
-                          left: 12,
-                          right: 12,
-                          bottom: 12,
-                          child: Text(
-                            item.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                              height: 1.05,
-                            ),
+                      ),
+                      Positioned(
+                        left: 14,
+                        right: 14,
+                        bottom: 12,
+                        child: Text(
+                          workout.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
                           ),
                         ),
-                      ],
+                      ),
                     ],
                   ),
                 ),
@@ -699,74 +632,39 @@ class _HorizontalImageTiles extends StatelessWidget {
   }
 }
 
-class _WorkoutList extends StatelessWidget {
-  const _WorkoutList({
-    required this.workoutsFuture,
-    required this.fallbackItems,
-  });
+class _InlineMessage extends StatelessWidget {
+  const _InlineMessage({required this.message, this.onRetry});
 
-  final Future<List<MobileWorkout>> workoutsFuture;
-  final List<_WorkoutData> fallbackItems;
+  final String message;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<MobileWorkout>>(
-      future: workoutsFuture,
-      builder: (context, snapshot) {
-        final workouts =
-            snapshot.data
-                ?.where((workout) => workout.isPublishedMobile)
-                .toList() ??
-            const <MobileWorkout>[];
-        final items = workouts.isEmpty
-            ? fallbackItems
-            : workouts
-                  .take(8)
-                  .toList()
-                  .asMap()
-                  .entries
-                  .map(
-                    (entry) => _WorkoutData(
-                      entry.value.name,
-                      _aurexPlaceholderAsset,
-                      entry.value.coverImageUrl,
-                    ),
-                  )
-                  .toList();
-
-        return _WorkoutRail(items: items);
-      },
-    );
-  }
-}
-
-class _WorkoutRail extends StatelessWidget {
-  const _WorkoutRail({required this.items});
-
-  final List<_WorkoutData> items;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 164,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
-        scrollDirection: Axis.horizontal,
-        itemCount: items.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 16),
-        itemBuilder: (context, index) {
-          final item = items[index];
-          return SizedBox(
-            width: 278,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: _RemoteOrAssetImage(
-                imageUrl: item.imageUrl,
-                asset: item.image,
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 32),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+            ),
+          ),
+          if (onRetry != null)
+            TextButton(
+              onPressed: onRetry,
+              child: const Text(
+                'Retry',
+                style: TextStyle(color: _LandingColors.softGold),
               ),
             ),
-          );
-        },
+        ],
       ),
     );
   }
@@ -967,34 +865,30 @@ class _ShimmerSurfaceState extends State<_ShimmerSurface>
 class _ImageTileData {
   const _ImageTileData(
     this.title,
-    this.image,
-    this.highlight, [
+    this.image, {
     this.imageUrl = '',
-  ]);
-
-  final String title;
-  final String image;
-  final bool highlight;
-  final String imageUrl;
-}
-
-class _WorkoutData {
-  const _WorkoutData(this.title, this.image, [this.imageUrl = '']);
+    this.onTap,
+  });
 
   final String title;
   final String image;
   final String imageUrl;
+  final VoidCallback? onTap;
 }
 
 class _HorizontalImageTilePlaceholders extends StatelessWidget {
-  const _HorizontalImageTilePlaceholders({required this.width});
+  const _HorizontalImageTilePlaceholders({
+    required this.width,
+    this.height = 178,
+  });
 
   final double width;
+  final double height;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 178,
+      height: height,
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(horizontal: 32),
         scrollDirection: Axis.horizontal,

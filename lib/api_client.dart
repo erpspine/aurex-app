@@ -1,146 +1,365 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
-import 'aurex_http.dart';
-import 'login.dart';
+import 'package:http/http.dart' as http;
+
+import 'activity.dart';
+import 'config.dart';
+import 'models.dart';
 
 class AurexApiException implements Exception {
-  const AurexApiException(this.message);
+  const AurexApiException(
+    this.message, {
+    this.statusCode = 0,
+    this.verificationRequired = false,
+    this.retryAfter = 0,
+  });
 
   final String message;
+  final int statusCode;
+  final bool verificationRequired;
+  final int retryAfter;
+
+  bool get isUnauthorized => statusCode == 401;
 
   @override
   String toString() => message;
 }
 
+/// Thin wrapper over the AUREX REST API. Works on mobile, desktop and web
+/// because it only uses `package:http`.
 class AurexApiClient {
-  const AurexApiClient._();
+  AurexApiClient({
+    required http.Client httpClient,
+    this.token,
+    this.cookieAuth = false,
+    this.onUnauthorized,
+    this.baseUrl = aurexApiBaseUrl,
+  }) : _http = httpClient;
 
-  static Future<List<MobileWorkout>>? _workoutsCache;
-  static Future<List<MobileExercise>>? _exercisesCache;
-  static Future<List<MobileEquipment>>? _equipmentCache;
-  static Future<List<MobileWorkoutLevel>>? _workoutLevelsCache;
-  static Future<List<MobileAppBanner>>? _homeBannersCache;
+  final http.Client _http;
+  final String? token;
+  final String baseUrl;
 
-  static Future<List<MobileWorkout>> fetchWorkouts({
-    bool forceRefresh = false,
-  }) {
-    if (forceRefresh || _workoutsCache == null) {
-      _workoutsCache = _fetchWorkouts().catchError((Object error) {
-        _workoutsCache = null;
-        throw error;
-      });
-    }
+  /// Browser mode: the server keeps the token in an HttpOnly cookie, so the
+  /// app never sees or stores it. Requires an `httpClient` that sends
+  /// credentials (see `http_client_web.dart`).
+  final bool cookieAuth;
 
-    return _workoutsCache!;
-  }
+  /// Called when an authenticated request is rejected with 401.
+  final void Function()? onUnauthorized;
 
-  static Future<List<MobileExercise>> fetchExercises({
-    bool forceRefresh = false,
-  }) {
-    if (forceRefresh || _exercisesCache == null) {
-      _exercisesCache = _fetchExercises().catchError((Object error) {
-        _exercisesCache = null;
-        throw error;
-      });
-    }
+  static const _timeout = Duration(seconds: 30);
 
-    return _exercisesCache!;
-  }
+  // ---------------------------------------------------------------- auth
 
-  static Future<List<MobileEquipment>> fetchEquipment({
-    bool forceRefresh = false,
-  }) {
-    if (forceRefresh || _equipmentCache == null) {
-      _equipmentCache = _fetchEquipment().catchError((Object error) {
-        _equipmentCache = null;
-        throw error;
-      });
-    }
+  Future<AurexSession> login({
+    required String email,
+    required String password,
+  }) async {
+    final payload = await _send(
+      'POST',
+      '/login',
+      body: {'email': email, 'password': password},
+    );
 
-    return _equipmentCache!;
-  }
-
-  static Future<List<MobileWorkoutLevel>> fetchWorkoutLevels({
-    bool forceRefresh = false,
-  }) {
-    if (forceRefresh || _workoutLevelsCache == null) {
-      _workoutLevelsCache = _fetchWorkoutLevels().catchError((Object error) {
-        _workoutLevelsCache = null;
-        throw error;
-      });
-    }
-
-    return _workoutLevelsCache!;
-  }
-
-  static Future<List<MobileAppBanner>> fetchHomeBanners({
-    bool forceRefresh = false,
-  }) {
-    if (forceRefresh || _homeBannersCache == null) {
-      _homeBannersCache = _fetchHomeBanners().catchError((Object error) {
-        _homeBannersCache = null;
-        throw error;
-      });
-    }
-
-    return _homeBannersCache!;
-  }
-
-  static Future<MobileProfile> fetchProfile() async {
-    final payload = await _get('/me');
-    return MobileProfile.fromPayload(payload);
-  }
-
-  static Future<MobileProfile> updateProfile(
-    Map<String, dynamic> values,
-  ) async {
-    final payload = await _put('/profile', values);
-    return MobileProfile.fromPayload(payload);
-  }
-
-  static Future<MobileProfile> uploadProfilePhoto(String filePath) async {
-    try {
-      final uri = Uri.parse('$aurexApiBaseUrl/profile/photo');
-      final headers = <String, String>{'Accept': 'application/json'};
-
-      final token = AurexSession.current?.token;
-      if (token != null && token.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $token';
-      }
-
-      final response = await aurexUploadFile(
-        uri,
-        headers: headers,
-        fieldName: 'profile_photo',
-        filePath: filePath,
-      );
-      final payload = _payloadFrom(response);
-
-      if (response.statusCode == 401) {
-        throw const AurexApiException('Your session has expired. Login again.');
-      }
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw AurexApiException(
-          _messageFrom(payload) ?? 'Unable to update profile photo.',
-        );
-      }
-
-      return MobileProfile.fromPayload(payload);
-    } on AurexNetworkException {
+    final session = AurexSession.fromJson(payload);
+    if (session == null || (!cookieAuth && session.token == null)) {
       throw const AurexApiException(
-        'Unable to reach the AUREX server. Check your connection.',
+        'The server returned an incomplete login response.',
       );
-    } on FormatException {
+    }
+
+    return session;
+  }
+
+  /// The signed-in user, used on the web to check whether the auth cookie is
+  /// still valid when the app starts.
+  Future<AurexSession> fetchSession() async {
+    final payload = await _send('GET', '/me');
+    final session = AurexSession.fromJson(payload);
+    if (session == null) {
       throw const AurexApiException('The server returned an invalid response.');
     }
+
+    return AurexSession(
+      token: token,
+      user: session.user,
+      member: session.member,
+    );
   }
 
-  static Future<List<Map<String, dynamic>>> _getList(
+  Future<Map<String, dynamic>> register({
+    required String name,
+    required String email,
+    required String password,
+    required String confirmation,
+  }) => _send(
+    'POST',
+    '/register',
+    body: {
+      'name': name,
+      'email': email,
+      'password': password,
+      'password_confirmation': confirmation,
+    },
+  );
+
+  Future<Map<String, dynamic>> verifyEmail(String email, String code) =>
+      _send('POST', '/email/verify', body: {'email': email, 'code': code});
+
+  Future<Map<String, dynamic>> resendCode(String email) =>
+      _send('POST', '/email/resend', body: {'email': email});
+
+  Future<Map<String, dynamic>> forgotPassword(String email) =>
+      _send('POST', '/password/forgot', body: {'email': email});
+
+  Future<Map<String, dynamic>> verifyPasswordCode(String email, String code) =>
+      _send('POST', '/password/verify', body: {'email': email, 'code': code});
+
+  Future<Map<String, dynamic>> resetPassword(
+    String email,
+    String resetToken,
+    String password,
+    String confirmation,
+  ) => _send(
+    'POST',
+    '/password/reset',
+    body: {
+      'email': email,
+      'reset_token': resetToken,
+      'password': password,
+      'password_confirmation': confirmation,
+    },
+  );
+
+  Future<void> logout() async {
+    await _send('POST', '/logout', body: const {});
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String password,
+    required String confirmation,
+  }) async {
+    await _send(
+      'POST',
+      '/change-password',
+      body: {
+        'current_password': currentPassword,
+        'password': password,
+        'password_confirmation': confirmation,
+      },
+      fallbackMessage: 'Unable to change password.',
+    );
+  }
+
+  // ------------------------------------------------------------- profile
+
+  Future<MobileProfile> fetchProfile() async {
+    return MobileProfile.fromPayload(await _send('GET', '/me'));
+  }
+
+  Future<MobileProfile> updateProfile(Map<String, dynamic> values) async {
+    final payload = await _send(
+      'PUT',
+      '/profile',
+      body: values,
+      fallbackMessage: 'Unable to save profile.',
+    );
+    return MobileProfile.fromPayload(payload);
+  }
+
+  Future<MobileProfile> uploadProfilePhoto({
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    final request = http.MultipartRequest('POST', _uri('/profile/photo'))
+      ..headers.addAll(_headers())
+      ..files.add(
+        http.MultipartFile.fromBytes(
+          'profile_photo',
+          bytes,
+          filename: fileName.isEmpty ? 'profile-photo.jpg' : fileName,
+        ),
+      );
+
+    final payload = await _guard(() async {
+      final streamed = await _http.send(request).timeout(_timeout);
+      return http.Response.fromStream(streamed);
+    }, fallbackMessage: 'Unable to update profile photo.');
+
+    return MobileProfile.fromPayload(payload);
+  }
+
+  // ------------------------------------------------------------- catalogue
+
+  Future<List<MobileWorkout>> fetchWorkouts() async {
+    final items = await _getList('/workouts', 'workouts');
+    return items.map(MobileWorkout.fromJson).toList();
+  }
+
+  Future<List<MobileExercise>> fetchExercises() async {
+    final items = await _getList('/exercises', 'exercises');
+    return items.map(MobileExercise.fromJson).toList();
+  }
+
+  Future<List<MobileEquipment>> fetchEquipment() async {
+    final items = await _getList('/equipment', 'equipment');
+    return items.map(MobileEquipment.fromJson).toList();
+  }
+
+  Future<List<MobileWorkoutLevel>> fetchWorkoutLevels() async {
+    final items = await _getList('/workout-levels', 'workout_levels');
+    return items.map(MobileWorkoutLevel.fromJson).toList();
+  }
+
+  Future<List<MobileAppBanner>> fetchHomeBanners() async {
+    final items = await _getList('/app-banners', 'app_banners');
+    final now = DateTime.now();
+    return items
+        .map(MobileAppBanner.fromJson)
+        .where((banner) => banner.isVisibleHomeBanner(now))
+        .toList();
+  }
+
+  Future<List<MobileDietPlan>> fetchDietPlans() async {
+    final items = await _getList('/diet-plans', 'diet_plans');
+    return items.map(MobileDietPlan.fromJson).toList();
+  }
+
+  // -------------------------------------------------------------- activity
+
+  Future<List<WorkoutLogEntry>> fetchWorkoutLogs() async {
+    final items = await _getList('/activity/workouts', 'workout_logs');
+    return items
+        .map(WorkoutLogEntry.fromJson)
+        .whereType<WorkoutLogEntry>()
+        .toList();
+  }
+
+  /// Saves a finished session. [entry]'s id is sent as the client id so a
+  /// retried request does not create a duplicate.
+  Future<WorkoutLogEntry> createWorkoutLog(WorkoutLogEntry entry) async {
+    final payload = await _send(
+      'POST',
+      '/activity/workouts',
+      body: {
+        ...entry.toJson()..remove('id'),
+        'client_id': entry.id,
+        'completed_at': entry.completedAt.toUtc().toIso8601String(),
+      },
+      fallbackMessage: 'Unable to save the workout.',
+    );
+    return _required(WorkoutLogEntry.fromJson(_map(payload['workout_log'])));
+  }
+
+  Future<List<FoodEntry>> fetchFoodEntries() async {
+    final items = await _getList('/activity/food', 'food_entries');
+    return items.map(FoodEntry.fromJson).toList();
+  }
+
+  Future<FoodEntry> createFoodEntry(FoodEntry entry) async {
+    final payload = await _send(
+      'POST',
+      '/activity/food',
+      body: {...entry.toJson()..remove('id'), 'client_id': entry.id},
+      fallbackMessage: 'Unable to add the food.',
+    );
+    return FoodEntry.fromJson(_map(payload['food_entry']));
+  }
+
+  Future<void> deleteFoodEntry(String id) async {
+    await _send(
+      'DELETE',
+      '/activity/food/${Uri.encodeComponent(id)}',
+      fallbackMessage: 'Unable to remove the food.',
+    );
+  }
+
+  /// Cups of water per `yyyy-mm-dd` day.
+  Future<Map<String, int>> fetchWaterLogs() async {
+    final items = await _getList('/activity/water', 'water_logs');
+    return {
+      for (final item in items)
+        '${item['date']}': (item['cups'] as num?)?.toInt() ?? 0,
+    };
+  }
+
+  Future<void> saveWater(String day, int cups) async {
+    await _send(
+      'PUT',
+      '/activity/water/$day',
+      body: {'cups': cups},
+      fallbackMessage: 'Unable to save water intake.',
+    );
+  }
+
+  Future<({int? calorieGoal, String? planId})> fetchDietPreferences() async {
+    final payload = await _send('GET', '/activity/diet-preferences');
+    return _preferences(payload);
+  }
+
+  Future<({int? calorieGoal, String? planId})> saveDietPreferences({
+    int? calorieGoal,
+    String? planId,
+  }) async {
+    final payload = await _send(
+      'PUT',
+      '/activity/diet-preferences',
+      body: {'calorie_goal': calorieGoal, 'diet_plan_id': planId},
+      fallbackMessage: 'Unable to save diet preferences.',
+    );
+    return _preferences(payload);
+  }
+
+  static ({int? calorieGoal, String? planId}) _preferences(
+    Map<String, dynamic> payload,
+  ) {
+    final data = _map(payload['diet_preferences']);
+    return (
+      calorieGoal: (data['calorie_goal'] as num?)?.toInt(),
+      planId: data['diet_plan_id'] as String?,
+    );
+  }
+
+  static Map<String, dynamic> _map(Object? value) {
+    if (value is Map) {
+      return Map<String, dynamic>.from(value);
+    }
+    throw const AurexApiException('The server returned an invalid response.');
+  }
+
+  static T _required<T>(T? value) {
+    if (value == null) {
+      throw const AurexApiException('The server returned an invalid response.');
+    }
+    return value;
+  }
+
+  // ------------------------------------------------------------- plumbing
+
+  Uri _uri(String path) => Uri.parse('$baseUrl$path');
+
+  Map<String, String> _headers({bool json = false}) {
+    return {
+      'Accept': 'application/json',
+      if (json) 'Content-Type': 'application/json',
+      if (token != null && token!.isNotEmpty) 'Authorization': 'Bearer $token',
+      if (cookieAuth) ...{
+        'X-Aurex-Auth': 'cookie',
+        // Required by the API for cookie-authenticated requests (CSRF guard).
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> _getList(
     String path,
     String listKey,
   ) async {
-    final payload = await _get(path);
+    final payload = await _send('GET', path);
     final value = payload[listKey];
 
     if (value is List) {
@@ -153,121 +372,93 @@ class AurexApiClient {
     throw const AurexApiException('The server returned an invalid response.');
   }
 
-  static Future<List<MobileWorkout>> _fetchWorkouts() async {
-    final items = await _getList('/workouts', 'workouts');
-    return items.map(MobileWorkout.fromJson).toList();
+  Future<Map<String, dynamic>> _send(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    String fallbackMessage = 'Unable to complete the request.',
+  }) {
+    return _guard(() {
+      final uri = _uri(path);
+      final headers = _headers(json: body != null);
+      final encoded = body == null ? null : jsonEncode(body);
+
+      final future = switch (method) {
+        'POST' => _http.post(uri, headers: headers, body: encoded),
+        'PUT' => _http.put(uri, headers: headers, body: encoded),
+        'DELETE' => _http.delete(uri, headers: headers),
+        _ => _http.get(uri, headers: headers),
+      };
+      return future.timeout(_timeout);
+    }, fallbackMessage: fallbackMessage);
   }
 
-  static Future<List<MobileExercise>> _fetchExercises() async {
-    final items = await _getList('/exercises', 'exercises');
-    return items.map(MobileExercise.fromJson).toList();
-  }
-
-  static Future<List<MobileEquipment>> _fetchEquipment() async {
-    final items = await _getList('/equipment', 'equipment');
-    return items.map(MobileEquipment.fromJson).toList();
-  }
-
-  static Future<List<MobileWorkoutLevel>> _fetchWorkoutLevels() async {
-    final items = await _getList('/workout-levels', 'workout_levels');
-    return items.map(MobileWorkoutLevel.fromJson).toList();
-  }
-
-  static Future<List<MobileAppBanner>> _fetchHomeBanners() async {
-    final items = await _getList('/mobile-app', 'banners');
-    final now = DateTime.now();
-    return items
-        .map(MobileAppBanner.fromJson)
-        .where((banner) => banner.isVisibleHomeBanner(now))
-        .toList();
-  }
-
-  static Future<Map<String, dynamic>> _get(String path) async {
+  Future<Map<String, dynamic>> _guard(
+    Future<http.Response> Function() request, {
+    required String fallbackMessage,
+  }) async {
+    final http.Response response;
     try {
-      final uri = Uri.parse('$aurexApiBaseUrl$path');
-      final headers = <String, String>{'Accept': 'application/json'};
-
-      final token = AurexSession.current?.token;
-      if (token != null && token.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $token';
-      }
-
-      final response = await aurexGet(uri, headers: headers);
-      final responseBody = response.body;
-      final payload = jsonDecode(responseBody) as Map<String, dynamic>;
-
-      if (response.statusCode == 401) {
-        throw const AurexApiException('Your session has expired. Login again.');
-      }
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw AurexApiException(
-          payload['message']?.toString() ?? 'Unable to load data.',
-        );
-      }
-
-      return payload;
-    } on AurexNetworkException {
+      response = await request();
+    } on TimeoutException {
+      throw const AurexApiException('The request timed out. Please try again.');
+    } on http.ClientException {
       throw const AurexApiException(
         'Unable to reach the AUREX server. Check your connection.',
       );
-    } on FormatException {
-      throw const AurexApiException('The server returned an invalid response.');
     }
-  }
 
-  static Future<Map<String, dynamic>> _put(
-    String path,
-    Map<String, dynamic> values,
-  ) async {
-    try {
-      final uri = Uri.parse('$aurexApiBaseUrl$path');
-      final headers = <String, String>{'Accept': 'application/json'};
+    final status = response.statusCode;
+    final payload = _decode(response);
 
-      final token = AurexSession.current?.token;
-      if (token != null && token.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $token';
-      }
-
-      final response = await aurexPutJson(
-        uri,
-        headers: headers,
-        body: jsonEncode(values),
-      );
-      final payload = _payloadFrom(response);
-
-      if (response.statusCode == 401) {
-        throw const AurexApiException('Your session has expired. Login again.');
-      }
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw AurexApiException(
-          _messageFrom(payload) ?? 'Unable to save profile.',
+    if (status >= 200 && status < 300) {
+      if (payload == null) {
+        throw const AurexApiException(
+          'The server returned an invalid response.',
         );
       }
-
       return payload;
-    } on AurexNetworkException {
-      throw const AurexApiException(
-        'Unable to reach the AUREX server. Check your connection.',
-      );
-    } on FormatException {
-      throw const AurexApiException('The server returned an invalid response.');
     }
+
+    if (status == 401 && (token != null || cookieAuth)) {
+      onUnauthorized?.call();
+      throw const AurexApiException(
+        'Your session has expired. Please log in again.',
+        statusCode: 401,
+      );
+    }
+
+    if (payload == null) {
+      throw AurexApiException(
+        status >= 500
+            ? 'Server error $status. Please contact support.'
+            : fallbackMessage,
+        statusCode: status,
+      );
+    }
+
+    throw AurexApiException(
+      _messageFrom(payload) ?? fallbackMessage,
+      statusCode: status,
+      verificationRequired: payload['verification_required'] == true,
+      retryAfter: payload['retry_after'] is int
+          ? payload['retry_after'] as int
+          : 0,
+    );
   }
 
-  static Map<String, dynamic> _payloadFrom(AurexHttpResponse response) {
+  static Map<String, dynamic>? _decode(http.Response response) {
     final body = response.body.trim();
     if (body.isEmpty) {
-      throw const FormatException();
+      return null;
     }
 
-    final decoded = jsonDecode(body);
-    if (decoded is Map) {
-      return Map<String, dynamic>.from(decoded);
+    try {
+      final decoded = jsonDecode(body);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } on FormatException {
+      return null;
     }
-
-    throw const FormatException();
   }
 
   static String? _messageFrom(Map<String, dynamic> payload) {
@@ -283,548 +474,4 @@ class AurexApiClient {
 
     return payload['message']?.toString();
   }
-
-  static String mediaUrl(String? value) {
-    final raw = value?.trim() ?? '';
-    if (raw.isEmpty) {
-      return '';
-    }
-
-    final publicBase = aurexApiBaseUrl.replaceFirst(RegExp(r'/api/?$'), '');
-
-    if (raw.startsWith('/')) {
-      return '$publicBase$raw';
-    }
-
-    final uri = Uri.tryParse(raw);
-    if (uri == null || !uri.hasScheme) {
-      return '$publicBase/$raw';
-    }
-
-    if (uri.host == 'localhost' || uri.host == '127.0.0.1') {
-      return '$publicBase${uri.path}';
-    }
-
-    return raw;
-  }
-}
-
-class MobileProfile {
-  const MobileProfile({required this.user, required this.member});
-
-  final Map<String, dynamic> user;
-  final Map<String, dynamic> member;
-
-  factory MobileProfile.fromPayload(Map<String, dynamic> payload) {
-    return MobileProfile(
-      user: payload['user'] is Map
-          ? Map<String, dynamic>.from(payload['user'] as Map)
-          : const {},
-      member: payload['member'] is Map
-          ? Map<String, dynamic>.from(payload['member'] as Map)
-          : const {},
-    );
-  }
-
-  String get fullName => _string(
-    member['full_name'],
-    fallback: _string(user['name'], fallback: 'Member'),
-  );
-  String get email =>
-      _string(member['email'], fallback: _string(user['email']));
-  String get phone =>
-      _string(member['phone'], fallback: _string(user['phone']));
-  String get gender => _string(member['gender']);
-  String get dateOfBirth => _date(member['date_of_birth']);
-  String get address => _string(member['address']);
-  String get heightCm => _string(member['height_cm']);
-  String get weightKg => _string(member['weight_kg']);
-  String get fitnessGoal =>
-      _string(member['fitness_goal'], fallback: 'General Fitness');
-  String get workoutLevel =>
-      _string(member['workout_level'], fallback: 'Beginner');
-  String get emergencyName => _string(member['emergency_contact_name']);
-  String get emergencyRelationship =>
-      _string(member['emergency_contact_relationship']);
-  String get emergencyPhone => _string(member['emergency_contact_phone']);
-  String get memberSince => _date(member['start_date']);
-  String get membershipStatus => _string(member['membership_status']);
-  String get membershipPlanName {
-    final plan = member['membership_plan'];
-    if (plan is Map) {
-      return _string(plan['name']);
-    }
-
-    return '';
-  }
-
-  String get cardNumber {
-    final card = member['card_details'];
-    if (card is Map) {
-      return _string(card['card_number']);
-    }
-
-    return _string(member['access_code']);
-  }
-
-  String get cardStatus {
-    final card = member['card_details'];
-    if (card is Map) {
-      return _string(card['status'], fallback: cardNumber.isEmpty ? 'Not linked' : 'Linked');
-    }
-
-    return cardNumber.isEmpty ? 'Not linked' : 'Linked';
-  }
-
-  String get renewalDate => _date(member['renewal_date'] ?? member['expiry_date']);
-  int? get daysBeforeExpiry {
-    final value = member['days_before_expiry'];
-    if (value is int) return value;
-    return int.tryParse(_string(value));
-  }
-
-  String get amountPaid => _currency(member['amount_paid'], _string(member['currency'], fallback: 'TZS'));
-  String get paymentMethod => _string(member['payment_method']);
-  String get paymentStatus => _string(member['payment_status']);
-  Map<String, dynamic> get latestPayment => member['latest_payment'] is Map
-      ? Map<String, dynamic>.from(member['latest_payment'] as Map)
-      : const {};
-
-  List<Map<String, dynamic>> get recentPayments => member['recent_payments'] is List
-      ? (member['recent_payments'] as List)
-          .whereType<Map>()
-          .map((item) => Map<String, dynamic>.from(item))
-          .toList()
-      : const [];
-
-  String get latestPaymentAmount => latestPayment.isEmpty
-      ? ''
-      : _currency(latestPayment['amount'], _string(latestPayment['currency'], fallback: 'TZS'));
-  String get latestPaymentDate => _date(latestPayment['payment_date']);
-  String get latestPaymentFor => _string(latestPayment['payment_for']);
-  String get latestPaymentStatus => _string(latestPayment['payment_status']);
-  String get profilePhotoUrl =>
-      AurexApiClient.mediaUrl(_string(user['profile_photo_path']));
-
-  int get completionPercent {
-    final fields = [
-      fullName,
-      email,
-      phone,
-      gender,
-      dateOfBirth,
-      address,
-      heightCm,
-      weightKg,
-      fitnessGoal,
-      workoutLevel,
-      emergencyName,
-      emergencyPhone,
-    ];
-    final completed = fields.where((value) => value.trim().isNotEmpty).length;
-    return ((completed / fields.length) * 100).round().clamp(0, 100);
-  }
-}
-
-class MobileWorkout {
-  const MobileWorkout({
-    required this.id,
-    required this.name,
-    required this.goal,
-    required this.level,
-    required this.type,
-    required this.duration,
-    required this.caloriesBurn,
-    required this.description,
-    required this.coverImageUrl,
-    required this.workoutDays,
-    required this.exercises,
-    required this.publishStatus,
-    required this.showInMobileApp,
-  });
-
-  final String id;
-  final String name;
-  final String goal;
-  final String level;
-  final String type;
-  final String duration;
-  final String caloriesBurn;
-  final String description;
-  final String coverImageUrl;
-  final List<MobileWorkoutDay> workoutDays;
-  final List<Map<String, dynamic>> exercises;
-  final String publishStatus;
-  final bool showInMobileApp;
-
-  int get dayCount => workoutDays.length;
-  int get exerciseCount => workoutDays.fold<int>(
-        0,
-        (total, day) => total + day.exercises.length,
-      );
-  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
-
-  factory MobileWorkout.fromJson(Map<String, dynamic> json) {
-    return MobileWorkout(
-      id: _string(json['id']),
-      name: _string(json['name'], fallback: 'Workout'),
-      goal: _string(json['goal'], fallback: 'General Fitness'),
-      level: _string(json['workout_level'], fallback: 'All Levels'),
-      type: _string(json['workout_type'], fallback: 'Workout'),
-      duration: _duration(json['duration']),
-      caloriesBurn: _string(json['calories_burn']),
-      description: _string(json['description']),
-      coverImageUrl: _versionedMediaUrl(
-        json['cover_image_url'],
-        json['updated_at'],
-      ),
-      workoutDays: _workoutDays(json['workout_days'], json['exercises']),
-      exercises: _mapList(json['exercises']),
-      publishStatus: _string(json['publish_status']),
-      showInMobileApp: _bool(json['show_in_mobile_app']),
-    );
-  }
-}
-
-class MobileWorkoutDay {
-  const MobileWorkoutDay({
-    required this.dayNumber,
-    required this.title,
-    required this.notes,
-    required this.exercises,
-  });
-
-  final int dayNumber;
-  final String title;
-  final String notes;
-  final List<Map<String, dynamic>> exercises;
-
-  factory MobileWorkoutDay.fromJson(Map<String, dynamic> json, int fallbackDay) {
-    return MobileWorkoutDay(
-      dayNumber: _int(json['day_number'], fallback: fallbackDay),
-      title: _string(json['title'], fallback: 'Day $fallbackDay'),
-      notes: _string(json['notes']),
-      exercises: _mapList(json['exercises']),
-    );
-  }
-}
-
-class MobileExercise {
-  const MobileExercise({
-    required this.id,
-    required this.name,
-    required this.category,
-    required this.bodyPart,
-    required this.equipment,
-    required this.level,
-    required this.duration,
-    required this.sets,
-    required this.reps,
-    required this.restTime,
-    required this.description,
-    required this.imageUrl,
-    required this.videoUrl,
-    required this.instructions,
-    required this.muscleTags,
-    required this.publishStatus,
-    required this.showInMobileApp,
-  });
-
-  final String id;
-  final String name;
-  final String category;
-  final String bodyPart;
-  final String equipment;
-  final String level;
-  final String duration;
-  final String sets;
-  final String reps;
-  final String restTime;
-  final String description;
-  final String imageUrl;
-  final String videoUrl;
-  final List<String> instructions;
-  final List<String> muscleTags;
-  final String publishStatus;
-  final bool showInMobileApp;
-
-  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
-
-  factory MobileExercise.fromJson(Map<String, dynamic> json) {
-    return MobileExercise(
-      id: _string(json['id']),
-      name: _string(json['name'], fallback: 'Exercise'),
-      category: _string(json['category']),
-      bodyPart: _string(json['body_part']),
-      equipment: _string(json['equipment']),
-      level: _string(json['workout_level'], fallback: 'All Levels'),
-      duration: _duration(json['duration']),
-      sets: _string(json['sets'], fallback: '3 Sets'),
-      reps: _string(json['reps'], fallback: '8-12 Reps'),
-      restTime: _duration(json['rest_time'], fallback: '45 sec'),
-      description: _string(json['description']),
-      imageUrl: _versionedMediaUrl(json['image_url'], json['updated_at']),
-      videoUrl: _versionedMediaUrl(json['video_url'], json['updated_at']),
-      instructions: _stringList(json['instructions']),
-      muscleTags: _stringList(json['muscle_tags']),
-      publishStatus: _string(json['publish_status']),
-      showInMobileApp: _bool(json['show_in_mobile_app']),
-    );
-  }
-}
-
-class MobileEquipment {
-  const MobileEquipment({
-    required this.id,
-    required this.name,
-    required this.category,
-    required this.primaryMuscleGroup,
-    required this.supportedLevel,
-    required this.publishStatus,
-    required this.showInMobileApp,
-  });
-
-  final String id;
-  final String name;
-  final String category;
-  final String primaryMuscleGroup;
-  final String supportedLevel;
-  final String publishStatus;
-  final bool showInMobileApp;
-
-  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
-
-  factory MobileEquipment.fromJson(Map<String, dynamic> json) {
-    return MobileEquipment(
-      id: _string(json['id']),
-      name: _string(json['name'], fallback: 'Equipment'),
-      category: _string(json['category']),
-      primaryMuscleGroup: _string(json['primary_muscle_group']),
-      supportedLevel: _string(json['supported_level']),
-      publishStatus: _string(json['publish_status']),
-      showInMobileApp: _bool(json['show_in_mobile_app']),
-    );
-  }
-}
-
-class MobileWorkoutLevel {
-  const MobileWorkoutLevel({
-    required this.id,
-    required this.name,
-    required this.difficultyRank,
-    required this.intensity,
-    required this.coverImageUrl,
-    required this.publishStatus,
-    required this.showInMobileApp,
-  });
-
-  final String id;
-  final String name;
-  final int difficultyRank;
-  final String intensity;
-  final String coverImageUrl;
-  final String publishStatus;
-  final bool showInMobileApp;
-
-  bool get isPublishedMobile => publishStatus == 'Published' && showInMobileApp;
-
-  factory MobileWorkoutLevel.fromJson(Map<String, dynamic> json) {
-    return MobileWorkoutLevel(
-      id: _string(json['id']),
-      name: _string(json['name'], fallback: 'Level'),
-      difficultyRank: int.tryParse(_string(json['difficulty_rank'])) ?? 0,
-      intensity: _string(json['intensity']),
-      coverImageUrl: _versionedMediaUrl(
-        json['cover_image_url'],
-        json['updated_at'],
-      ),
-      publishStatus: _string(json['publish_status']),
-      showInMobileApp: _bool(json['show_in_mobile_app']),
-    );
-  }
-}
-
-class MobileAppBanner {
-  const MobileAppBanner({
-    required this.title,
-    required this.subtitle,
-    required this.bannerType,
-    required this.publishStatus,
-    required this.showInMobileApp,
-    required this.imageUrl,
-    required this.backgroundStyle,
-    required this.backgroundColor,
-    required this.accentColor,
-    required this.startDate,
-    required this.endDate,
-  });
-
-  final String title;
-  final String subtitle;
-  final String bannerType;
-  final String publishStatus;
-  final bool showInMobileApp;
-  final String imageUrl;
-  final String backgroundStyle;
-  final String backgroundColor;
-  final String accentColor;
-  final DateTime? startDate;
-  final DateTime? endDate;
-
-  factory MobileAppBanner.fromJson(Map<String, dynamic> json) {
-    return MobileAppBanner(
-      title: _string(json['title']),
-      subtitle: _string(json['subtitle']),
-      bannerType: _string(json['banner_type']),
-      publishStatus: _string(json['publish_status']),
-      showInMobileApp: _bool(json['show_in_mobile_app']),
-      imageUrl: _versionedMediaUrl(json['image_url'], json['updated_at']),
-      backgroundStyle: _string(json['background_style']),
-      backgroundColor: _string(json['background_color'], fallback: '#050505'),
-      accentColor: _string(json['accent_color'], fallback: '#C8A13A'),
-      startDate: _parseDate(json['start_date']),
-      endDate: _parseDate(json['end_date']),
-    );
-  }
-
-  bool isVisibleHomeBanner(DateTime now) {
-    if (bannerType != 'Home Banner' ||
-        publishStatus != 'Published' ||
-        !showInMobileApp) {
-      return false;
-    }
-
-    final today = DateTime(now.year, now.month, now.day);
-    if (startDate != null && startDate!.isAfter(today)) {
-      return false;
-    }
-
-    if (endDate != null && endDate!.isBefore(today)) {
-      return false;
-    }
-
-    return true;
-  }
-}
-
-String _string(Object? value, {String fallback = ''}) {
-  if (value == null) {
-    return fallback;
-  }
-
-  final text = value.toString().trim();
-  return text.isEmpty ? fallback : text;
-}
-
-String _duration(Object? value, {String fallback = ''}) {
-  final text = _string(value);
-  if (text.isEmpty) {
-    return fallback;
-  }
-
-  return RegExp(r'[a-zA-Z]').hasMatch(text) ? text : '$text min';
-}
-
-int _int(Object? value, {int fallback = 0}) {
-  if (value is int) {
-    return value;
-  }
-
-  return int.tryParse(_string(value)) ?? fallback;
-}
-
-String _date(Object? value) {
-  final text = _string(value);
-  if (text.length >= 10) {
-    return text.substring(0, 10);
-  }
-
-  return text;
-}
-
-String _currency(Object? value, String currency) {
-  final amount = _int(value);
-  return '$currency ${amount.toString().replaceAllMapped(
-    RegExp(r'\B(?=(\d{3})+(?!\d))'),
-    (match) => ',',
-  )}';
-}
-
-String _versionedMediaUrl(Object? value, Object? updatedAt) {
-  final url = AurexApiClient.mediaUrl(_string(value));
-  final version = _string(updatedAt).replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
-
-  if (url.isEmpty || version.isEmpty) {
-    return url;
-  }
-
-  final uri = Uri.tryParse(url);
-  if (uri == null) {
-    return url;
-  }
-
-  return uri
-      .replace(queryParameters: {...uri.queryParameters, 'v': version})
-      .toString();
-}
-
-bool _bool(Object? value) {
-  return value == true || value == 1 || value == '1';
-}
-
-List<String> _stringList(Object? value) {
-  if (value is List) {
-    return value.map((item) => item.toString()).toList();
-  }
-
-  if (value is String && value.trim().isNotEmpty) {
-    return [value.trim()];
-  }
-
-  return const [];
-}
-
-List<Map<String, dynamic>> _mapList(Object? value) {
-  if (value is List) {
-    return value
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
-  }
-
-  return const [];
-}
-
-List<MobileWorkoutDay> _workoutDays(Object? value, Object? legacyExercises) {
-  final days = _mapList(value);
-  if (days.isNotEmpty) {
-    return [
-      for (var index = 0; index < days.length; index++)
-        MobileWorkoutDay.fromJson(days[index], index + 1),
-    ];
-  }
-
-  final exercises = _mapList(legacyExercises);
-  if (exercises.isEmpty) {
-    return const [];
-  }
-
-  return [
-    MobileWorkoutDay(
-      dayNumber: 1,
-      title: 'Day 1',
-      notes: '',
-      exercises: exercises,
-    ),
-  ];
-}
-
-DateTime? _parseDate(Object? value) {
-  final text = _string(value);
-  if (text.isEmpty) {
-    return null;
-  }
-
-  final normalized = text.length >= 10 ? text.substring(0, 10) : text;
-  return DateTime.tryParse(normalized);
 }

@@ -1,45 +1,428 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'bottom_nav.dart';
+import 'activity.dart';
+import 'api_client.dart';
+import 'diet.dart' show dayLabel;
+import 'models.dart';
+import 'providers.dart';
+import 'router.dart';
 
-class AddDietFormPage extends StatelessWidget {
+class AddDietFormPage extends ConsumerStatefulWidget {
   const AddDietFormPage({super.key});
 
   @override
+  ConsumerState<AddDietFormPage> createState() => _AddDietFormPageState();
+}
+
+enum _FoodSource { plan, custom }
+
+class _AddDietFormPageState extends ConsumerState<AddDietFormPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _amount = TextEditingController(text: '100');
+  final _servings = TextEditingController(text: '1');
+  final _calories = TextEditingController();
+  final _protein = TextEditingController();
+  final _carbs = TextEditingController();
+  final _fat = TextEditingController();
+  final _search = TextEditingController();
+
+  late String _mealType = _mealForTime(TimeOfDay.now());
+  late DateTime _date = ref.read(selectedDietDayProvider);
+  TimeOfDay _time = TimeOfDay.now();
+  _FoodSource _source = _FoodSource.plan;
+  bool _saving = false;
+
+  /// Sent with the entry so a retry after a network error is not duplicated.
+  final _clientId = '${DateTime.now().microsecondsSinceEpoch}';
+
+  @override
+  void initState() {
+    super.initState();
+    for (final controller in [
+      _servings,
+      _calories,
+      _protein,
+      _carbs,
+      _fat,
+      _search,
+    ]) {
+      controller.addListener(() => setState(() {}));
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final controller in [
+      _name,
+      _amount,
+      _servings,
+      _calories,
+      _protein,
+      _carbs,
+      _fat,
+      _search,
+    ]) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  static String _mealForTime(TimeOfDay time) {
+    if (time.hour < 11) return 'Breakfast';
+    if (time.hour < 15) return 'Lunch';
+    if (time.hour < 18) return 'Snack';
+    return 'Dinner';
+  }
+
+  double get _servingCount => _number(_servings) ?? 1;
+
+  double _total(TextEditingController controller) =>
+      (_number(controller) ?? 0) * _servingCount;
+
+  static double? _number(TextEditingController controller) =>
+      double.tryParse(controller.text.trim().replaceAll(',', '.'));
+
+  void _usePlanMeal(MobileDietMeal meal) {
+    setState(() {
+      _name.text = meal.food.isEmpty ? meal.name : meal.food;
+      _calories.text = meal.calorieValue?.toString() ?? '';
+      final type = mealTypes
+          .where((type) => meal.name.toLowerCase().contains(type.toLowerCase()))
+          .firstOrNull;
+      if (type != null) {
+        _mealType = type;
+      }
+      _source = _FoodSource.custom;
+    });
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) {
+      setState(() => _date = dateOnly(picked));
+    }
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(context: context, initialTime: _time);
+    if (picked != null) {
+      setState(() => _time = picked);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (_formKey.currentState?.validate() != true) {
+      if (_source == _FoodSource.plan) {
+        setState(() => _source = _FoodSource.custom);
+      }
+      return;
+    }
+
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await ref
+          .read(foodLogProvider.notifier)
+          .add(
+            FoodEntry(
+              id: _clientId,
+              date: dateKey(_date),
+              mealType: _mealType,
+              time:
+                  '${_time.hour.toString().padLeft(2, '0')}:'
+                  '${_time.minute.toString().padLeft(2, '0')}',
+              name: _name.text.trim(),
+              servings: _servingCount,
+              amountGrams: (_number(_amount) ?? 0) * _servingCount,
+              calories: _total(_calories),
+              protein: _total(_protein),
+              carbs: _total(_carbs),
+              fat: _total(_fat),
+            ),
+          );
+    } on AurexApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      if (mounted) setState(() => _saving = false);
+      return;
+    }
+
+    ref.read(selectedDietDayProvider.notifier).select(_date);
+    messenger.showSnackBar(
+      SnackBar(content: Text('${_name.text.trim()} added to $_mealType.')),
+    );
+
+    if (mounted) {
+      popOrGo(context, AurexRoutes.diet);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final plan = ref.watch(activeDietPlanProvider).value;
+    final query = _search.text.trim().toLowerCase();
+    final planMeals = (plan?.meals ?? const <MobileDietMeal>[])
+        .where(
+          (meal) =>
+              query.isEmpty ||
+              '${meal.name} ${meal.food}'.toLowerCase().contains(query),
+        )
+        .toList();
+
     return Scaffold(
       backgroundColor: _FormColors.black,
       body: SafeArea(
         top: false,
-        child: Stack(
-          children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(30, 52, 30, 126),
-              children: const [
-                _TopBar(),
-                SizedBox(height: 22),
-                _TitleBlock(),
-                SizedBox(height: 28),
-                _MealInformation(),
-                SizedBox(height: 18),
-                _FoodDetails(),
-                SizedBox(height: 18),
-                _ServingSize(),
-                SizedBox(height: 18),
-                _NutritionSummary(),
-                SizedBox(height: 18),
-                _AddToPanel(),
-                SizedBox(height: 18),
-                _SubmitButton(),
-              ],
-            ),
-            const Positioned(
-              left: 10,
-              right: 10,
-              bottom: 12,
-              child: AurexBottomNavigation(currentIndex: 3),
-            ),
-          ],
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 52, 24, 126),
+            children: [
+              const _TopBar(),
+              const SizedBox(height: 22),
+              const _TitleBlock(),
+              const SizedBox(height: 28),
+              _Panel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _SectionTitle('MEAL INFORMATION'),
+                    const SizedBox(height: 14),
+                    _InfoRow(
+                      label: 'Meal Type',
+                      child: DropdownButton<String>(
+                        value: _mealType,
+                        dropdownColor: const Color(0xFF141414),
+                        underline: const SizedBox.shrink(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        items: [
+                          for (final type in mealTypes)
+                            DropdownMenuItem(value: type, child: Text(type)),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) setState(() => _mealType = value);
+                        },
+                      ),
+                    ),
+                    _InfoRow(
+                      label: 'Time',
+                      child: _SelectBox(
+                        icon: Icons.schedule,
+                        value: _time.format(context),
+                        onTap: _pickTime,
+                      ),
+                    ),
+                    _InfoRow(
+                      label: 'Date',
+                      showDivider: false,
+                      child: _SelectBox(
+                        icon: Icons.calendar_month_outlined,
+                        value: dayLabel(_date),
+                        onTap: _pickDate,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              _Panel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _SectionTitle('FOOD DETAILS'),
+                    const SizedBox(height: 20),
+                    SegmentedButton<_FoodSource>(
+                      segments: const [
+                        ButtonSegment(
+                          value: _FoodSource.plan,
+                          icon: Icon(Icons.menu_book_outlined),
+                          label: Text('From Meal Plan'),
+                        ),
+                        ButtonSegment(
+                          value: _FoodSource.custom,
+                          icon: Icon(Icons.fastfood_outlined),
+                          label: Text('Custom Food'),
+                        ),
+                      ],
+                      selected: {_source},
+                      onSelectionChanged: (selection) =>
+                          setState(() => _source = selection.first),
+                      style: SegmentedButton.styleFrom(
+                        selectedForegroundColor: _FormColors.softGold,
+                        foregroundColor: _FormColors.muted,
+                        selectedBackgroundColor: Colors.black,
+                        side: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.16),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    if (_source == _FoodSource.plan) ...[
+                      _TextField(
+                        controller: _search,
+                        label: 'Search your meal plan',
+                        icon: Icons.search,
+                        validate: false,
+                      ),
+                      const SizedBox(height: 10),
+                      if (plan == null || plan.meals.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Text(
+                            'Your diet plan has no meals listed. Use Custom '
+                            'Food to log anything you ate.',
+                            style: TextStyle(color: _FormColors.muted),
+                          ),
+                        )
+                      else
+                        for (final meal in planMeals)
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(
+                              Icons.restaurant_rounded,
+                              color: _FormColors.gold,
+                            ),
+                            title: Text(
+                              meal.food.isEmpty ? meal.name : meal.food,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                            subtitle: Text(
+                              meal.name,
+                              style: const TextStyle(color: _FormColors.muted),
+                            ),
+                            trailing: Text(
+                              meal.calories,
+                              style: const TextStyle(
+                                color: _FormColors.softGold,
+                              ),
+                            ),
+                            onTap: () => _usePlanMeal(meal),
+                          ),
+                    ],
+                    // Kept in the tree so validation still runs while the
+                    // meal plan list is showing.
+                    Offstage(
+                      offstage: _source == _FoodSource.plan,
+                      child: Column(
+                        children: [
+                          _TextField(
+                            controller: _name,
+                            label: 'Food name',
+                            icon: Icons.fastfood_outlined,
+                            numeric: false,
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _TextField(
+                                  controller: _amount,
+                                  label: 'Amount',
+                                  suffix: 'g',
+                                  validate: false,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _TextField(
+                                  controller: _servings,
+                                  label: 'Servings',
+                                  suffix: 'serving',
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _TextField(
+                                  controller: _calories,
+                                  label: 'Calories / serving',
+                                  suffix: 'kcal',
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _TextField(
+                                  controller: _protein,
+                                  label: 'Protein',
+                                  suffix: 'g',
+                                  validate: false,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _TextField(
+                                  controller: _carbs,
+                                  label: 'Carbs',
+                                  suffix: 'g',
+                                  validate: false,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _TextField(
+                                  controller: _fat,
+                                  label: 'Fat',
+                                  suffix: 'g',
+                                  validate: false,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              _NutritionSummary(
+                protein: _total(_protein),
+                carbs: _total(_carbs),
+                fat: _total(_fat),
+                calories: _total(_calories),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                height: 66,
+                child: ElevatedButton(
+                  onPressed: _saving ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _FormColors.softGold,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: Text(
+                    _saving ? 'Adding...' : 'Add Food',
+                    style: const TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -54,7 +437,8 @@ class _TopBar extends StatelessWidget {
     return Row(
       children: [
         IconButton(
-          onPressed: () => Navigator.of(context).pop(),
+          tooltip: 'Back',
+          onPressed: () => popOrGo(context, AurexRoutes.diet),
           icon: const Icon(Icons.chevron_left, color: Colors.white, size: 38),
         ),
         const Spacer(),
@@ -96,177 +480,50 @@ class _TitleBlock extends StatelessWidget {
   }
 }
 
-class _MealInformation extends StatelessWidget {
-  const _MealInformation();
-
-  @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _SectionTitle('MEAL INFORMATION'),
-          const SizedBox(height: 14),
-          _InfoRow(
-            label: 'Meal Type',
-            value: 'Breakfast',
-            icon: Icons.wb_sunny_outlined,
-            iconColor: _FormColors.gold,
-          ),
-          _InfoRow(
-            label: 'Time',
-            value: '7:30 AM',
-            icon: Icons.schedule,
-            iconColor: _FormColors.muted,
-          ),
-          _InfoRow(
-            label: 'Date',
-            value: 'May 30, 2024',
-            icon: Icons.calendar_month_outlined,
-            iconColor: _FormColors.muted,
-            showDivider: false,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FoodDetails extends StatelessWidget {
-  const _FoodDetails();
-
-  @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _SectionTitle('FOOD DETAILS'),
-          const SizedBox(height: 20),
-          const _SegmentedChoice(),
-          const SizedBox(height: 18),
-          const _SearchField(),
-          const SizedBox(height: 24),
-          const Text(
-            'Selected Food',
-            style: TextStyle(color: _FormColors.muted, fontSize: 16),
-          ),
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: _inputDecoration(),
-            child: Row(
-              children: [
-                const _FoodThumb(),
-                const SizedBox(width: 18),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Grilled Chicken Breast',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      SizedBox(height: 6),
-                      Text(
-                        '100 g',
-                        style: TextStyle(
-                          color: _FormColors.muted,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Text(
-                  '165 kcal',
-                  style: TextStyle(
-                    color: _FormColors.softGold,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.close, color: _FormColors.muted),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ServingSize extends StatelessWidget {
-  const _ServingSize();
-
-  @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _SectionTitle('SERVING SIZE'),
-          const SizedBox(height: 22),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final compact = constraints.maxWidth < 520;
-              final fields = [
-                const _ServingField(label: 'Amount', value: '100', unit: 'g'),
-                const _ServingField(
-                  label: 'Servings',
-                  value: '1.0',
-                  unit: 'serving',
-                ),
-              ];
-
-              if (compact) {
-                return Column(
-                  children: [fields[0], const SizedBox(height: 12), fields[1]],
-                );
-              }
-
-              return Row(
-                children: [
-                  Expanded(child: fields[0]),
-                  const SizedBox(width: 16),
-                  Expanded(child: fields[1]),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _NutritionSummary extends StatelessWidget {
-  const _NutritionSummary();
+  const _NutritionSummary({
+    required this.protein,
+    required this.carbs,
+    required this.fat,
+    required this.calories,
+  });
 
-  static const items = [
-    (Icons.sports_gymnastics_rounded, 'Protein', '31 g', _FormColors.protein),
-    (Icons.water_drop_rounded, 'Carbs', '0 g', _FormColors.gold),
-    (Icons.opacity_rounded, 'Fats', '3.6 g', _FormColors.fat),
-    (Icons.local_fire_department, 'Calories', '165 kcal', _FormColors.calorie),
-  ];
+  final double protein;
+  final double carbs;
+  final double fat;
+  final double calories;
 
   @override
   Widget build(BuildContext context) {
+    final items = [
+      (
+        Icons.sports_gymnastics_rounded,
+        'Protein',
+        '${_round(protein)} g',
+        _FormColors.protein,
+      ),
+      (
+        Icons.water_drop_rounded,
+        'Carbs',
+        '${_round(carbs)} g',
+        _FormColors.gold,
+      ),
+      (Icons.opacity_rounded, 'Fats', '${_round(fat)} g', _FormColors.fat),
+      (
+        Icons.local_fire_department,
+        'Calories',
+        '${calories.round()} kcal',
+        _FormColors.calorie,
+      ),
+    ];
+
     return _Panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          const Wrap(
+            crossAxisAlignment: WrapCrossAlignment.end,
+            spacing: 8,
             children: [
               Text(
                 'NUTRITION SUMMARY',
@@ -276,7 +533,6 @@ class _NutritionSummary extends StatelessWidget {
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              SizedBox(width: 8),
               Text(
                 '(for this item)',
                 style: TextStyle(color: _FormColors.muted, fontSize: 14),
@@ -313,93 +569,27 @@ class _NutritionSummary extends StatelessWidget {
       ),
     );
   }
-}
 
-class _AddToPanel extends StatelessWidget {
-  const _AddToPanel();
-
-  @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _SectionTitle('ADD TO'),
-          const SizedBox(height: 18),
-          Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-            ),
-            child: Row(
-              children: const [
-                Expanded(
-                  child: _AddToChoice(
-                    icon: Icons.today_outlined,
-                    label: 'Add to Today',
-                    selected: true,
-                  ),
-                ),
-                Expanded(
-                  child: _AddToChoice(
-                    icon: Icons.event_outlined,
-                    label: 'Add to Another Day',
-                    selected: false,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SubmitButton extends StatelessWidget {
-  const _SubmitButton();
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 66,
-      child: ElevatedButton(
-        onPressed: () => Navigator.of(context).pop(),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _FormColors.softGold,
-          foregroundColor: Colors.black,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-        ),
-        child: const Text(
-          'Add Food',
-          style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
-        ),
-      ),
-    );
-  }
+  static String _round(double value) => value == value.roundToDouble()
+      ? '${value.round()}'
+      : value.toStringAsFixed(1);
 }
 
 class _InfoRow extends StatelessWidget {
   const _InfoRow({
     required this.label,
-    required this.value,
-    required this.icon,
-    required this.iconColor,
+    required this.child,
     this.showDivider = true,
   });
 
   final String label;
-  final String value;
-  final IconData icon;
-  final Color iconColor;
+  final Widget child;
   final bool showDivider;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
         border: showDivider
             ? Border(
@@ -415,7 +605,7 @@ class _InfoRow extends StatelessWidget {
               style: const TextStyle(color: Colors.white, fontSize: 18),
             ),
           ),
-          _SelectBox(icon: icon, iconColor: iconColor, value: value),
+          child,
         ],
       ),
     );
@@ -425,219 +615,112 @@ class _InfoRow extends StatelessWidget {
 class _SelectBox extends StatelessWidget {
   const _SelectBox({
     required this.icon,
-    required this.iconColor,
     required this.value,
+    required this.onTap,
   });
 
   final IconData icon;
-  final Color iconColor;
   final String value;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(minWidth: 206),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-      decoration: _inputDecoration(),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: iconColor, size: 24),
-          const SizedBox(width: 12),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 24),
-        ],
-      ),
-    );
-  }
-}
-
-class _SegmentedChoice extends StatelessWidget {
-  const _SegmentedChoice();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
-      ),
-      child: Row(
-        children: const [
-          Expanded(
-            child: _SegmentItem(
-              icon: Icons.search,
-              label: 'Search Food',
-              selected: true,
-            ),
-          ),
-          Expanded(
-            child: _SegmentItem(
-              icon: Icons.fastfood_outlined,
-              label: 'Custom Food',
-              selected: false,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SegmentItem extends StatelessWidget {
-  const _SegmentItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 58,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(9),
-        border: selected ? Border.all(color: _FormColors.gold) : null,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            icon,
-            color: selected ? _FormColors.gold : _FormColors.muted,
-            size: 24,
-          ),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: selected ? _FormColors.softGold : _FormColors.muted,
-                fontSize: 18,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: _inputDecoration(),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: _FormColors.muted, size: 22),
+            const SizedBox(width: 10),
+            Text(
+              value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SearchField extends StatelessWidget {
-  const _SearchField();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 60,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: _inputDecoration(),
-      child: const Row(
-        children: [
-          Icon(Icons.search, color: _FormColors.muted, size: 30),
-          SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              'Search for a food...',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: _FormColors.muted, fontSize: 18),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.keyboard_arrow_down,
+              color: Colors.white,
+              size: 22,
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FoodThumb extends StatelessWidget {
-  const _FoodThumb();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 78,
-      height: 78,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFFF8D3A), Color(0xFF73C94E)],
+          ],
         ),
       ),
-      child: const Icon(
-        Icons.restaurant_rounded,
-        color: Colors.black87,
-        size: 36,
-      ),
     );
   }
 }
 
-class _ServingField extends StatelessWidget {
-  const _ServingField({
+class _TextField extends StatelessWidget {
+  const _TextField({
+    required this.controller,
     required this.label,
-    required this.value,
-    required this.unit,
+    this.icon,
+    this.suffix,
+    this.numeric = true,
+    this.validate = true,
   });
 
+  final TextEditingController controller;
   final String label;
-  final String value;
-  final String unit;
+  final IconData? icon;
+  final String? suffix;
+  final bool numeric;
+
+  /// Whether the field is required (and, when [numeric], must be above zero).
+  final bool validate;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 86,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: _inputDecoration(),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: _FormColors.muted,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(color: Colors.white, fontSize: 22),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            unit,
-            style: const TextStyle(color: _FormColors.muted, fontSize: 18),
-          ),
-          const SizedBox(width: 12),
-          const Icon(Icons.keyboard_arrow_down, color: _FormColors.muted),
-        ],
+    return TextFormField(
+      controller: controller,
+      style: const TextStyle(color: Colors.white, fontSize: 17),
+      keyboardType: numeric
+          ? const TextInputType.numberWithOptions(decimal: true)
+          : TextInputType.text,
+      inputFormatters: numeric
+          ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))]
+          : null,
+      validator: (value) {
+        final text = value?.trim() ?? '';
+        if (!validate) return null;
+        if (text.isEmpty) return '$label is required';
+        if (numeric && (double.tryParse(text.replaceAll(',', '.')) ?? 0) <= 0) {
+          return 'Enter a number above 0';
+        }
+        return null;
+      },
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: _FormColors.muted),
+        prefixIcon: icon == null ? null : Icon(icon, color: _FormColors.muted),
+        suffixText: suffix,
+        suffixStyle: const TextStyle(color: _FormColors.muted),
+        errorStyle: const TextStyle(color: Color(0xFFFFB4AB)),
+        filled: true,
+        fillColor: Colors.white.withValues(alpha: 0.025),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: _FormColors.gold),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFFFB4AB)),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFFFB4AB)),
+        ),
       ),
     );
   }
@@ -698,53 +781,6 @@ class _NutritionItem extends StatelessWidget {
                   ),
                 ),
               ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AddToChoice extends StatelessWidget {
-  const _AddToChoice({
-    required this.icon,
-    required this.label,
-    required this.selected,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 58,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(9),
-        border: selected ? Border.all(color: _FormColors.gold) : null,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            icon,
-            color: selected ? _FormColors.gold : _FormColors.muted,
-            size: 23,
-          ),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: selected ? _FormColors.softGold : _FormColors.muted,
-                fontSize: 16,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ),
             ),
           ),
         ],
